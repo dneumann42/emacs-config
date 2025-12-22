@@ -1,0 +1,11 @@
+/.cache/
+/auto-save-list/
+/eln-cache/
+/init.el~
+/parinfer-rust/
+/eshell/
+/elpa/
+/transient/
+/projectile-bookmarks.eld
+/projects.eld
+/tramp
