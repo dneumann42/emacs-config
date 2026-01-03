@@ -36,6 +36,7 @@
 (menu-bar-mode -1)
 (line-number-mode 1)
 (global-auto-revert-mode 1)
+(pixel-scroll-precision-mode 1)
 
 (defun my/format-buffer ()
   "Indent the entire buffer using the active major mode."
@@ -49,22 +50,34 @@
 (global-set-key (kbd "C-c t n") #'tab-line-switch-to-next-tab)
 (global-set-key (kbd "C-c t p") #'tab-line-switch-to-prev-tab)
 (global-set-key (kbd "C-M-<return>") #'my/eldoc-show-help)
+(global-set-key (kbd "C-x /") #'my/consult-ripgrep-project)
+
+(defun my/consult-ripgrep-project ()
+  "Live grep the current projectile/project root with Consult + ripgrep."
+  (interactive)
+  (let ((dir (or (when (fboundp 'projectile-project-root)
+                   (ignore-errors (projectile-project-root)))
+                 (when-let* ((proj (project-current)))
+                   (car (project-roots proj)))
+                 default-directory)))
+    (consult-ripgrep dir)))
 
 (defun my/eldoc-show-help ()
   "Show docs in a popup when possible, otherwise fall back to the echo area."
   (interactive)
   (require 'eldoc)
   (require 'eldoc-box)
-  (let* ((eldoc-echo-area-prefer-doc-buffer nil)
-         (eldoc-display-functions (list #'eldoc-display-in-echo-area)))
-    ;; Populate the doc buffer without showing it.
-    (let ((display-buffer-overriding-action '((display-buffer-no-window))))
-      (eldoc-print-current-symbol-info nil))
-    (let ((eldoc--doc-buffer (eldoc-doc-buffer)))
-      (when (and eldoc--doc-buffer
-                 (buffer-live-p eldoc--doc-buffer)
-                 (not (equal "" (with-current-buffer eldoc--doc-buffer (buffer-string)))))
-        (eldoc-box-help-at-point)))))
+  ;; Populate the doc buffer without showing it.
+  (let ((display-buffer-overriding-action '((display-buffer-no-window))))
+    (condition-case err
+        (eldoc-print-current-symbol-info t)
+      (error
+       (message "Eldoc error: %s" (error-message-string err)))))
+  (let ((eldoc--doc-buffer (eldoc-doc-buffer)))
+    (when (and eldoc--doc-buffer
+               (buffer-live-p eldoc--doc-buffer)
+               (not (equal "" (with-current-buffer eldoc--doc-buffer (buffer-string)))))
+      (eldoc-box-help-at-point))))
 
 (defun my/elisp-eval-sexp-at-point ()
   "Evaluate the s-expression at point and echo the result."
@@ -91,12 +104,23 @@
   (define-key emacs-lisp-mode-map (kbd "C-M-<return>") #'my/eldoc-show-help))
 
 (add-hook 'emacs-lisp-mode-hook #'my/elisp-setup-keys)
+(add-hook 'lisp-interaction-mode-hook #'my/elisp-setup-keys)
+(add-hook 'emacs-lisp-mode-hook
+          (lambda ()
+            ;; Ensure elisp/builtin docstrings are available via Eldoc.
+            (setq-local eldoc-documentation-function
+                        #'elisp-eldoc-documentation-function)))
+(add-hook 'emacs-lisp-mode-hook
+          (lambda ()
+            ;; Ensure elisp/builtin docstrings are available.
+            (setq-local eldoc-documentation-function #'elisp-eldoc-documentation-function)))
 
 (setq eldoc-echo-area-use-multiline-p t
       eldoc-idle-delay 0.2
       eldoc-documentation-strategy #'eldoc-documentation-compose
       eldoc-ellipsis "..."
-      eldoc-echo-area-prefer-doc-buffer nil)
+      eldoc-echo-area-prefer-doc-buffer nil
+      eldoc-doc-buffer-separator "\n\n")
 
 (add-to-list 'display-buffer-alist
              '("\\*eldoc\\*" display-buffer-no-window))
@@ -110,23 +134,125 @@ INTERACTIVE is ignored; always fetches the buffer silently."
 
 (global-eldoc-mode 1)
 
+(defun my/eldoc-cleanup-markdown-code-fence (format-string &rest args)
+  "Strip Markdown code fences and flatten newlines so Eldoc stays on one line."
+  (when format-string
+    (let* ((raw (apply #'format format-string args))
+           (clean raw))
+      ;; Drop an opening ```lang line and the closing ``` line.
+      (setq clean (replace-regexp-in-string "\\`[ \t]*```[[:alnum:]-_]+[ \t]*\n" "" clean))
+      (setq clean (replace-regexp-in-string "\n```[ \t]*\\'" "" clean))
+      ;; Flatten remaining newlines to keep the echo area stable.
+      (setq clean (string-trim (replace-regexp-in-string "[ \t]*\n[ \t]*" " " clean)))
+      (eldoc-minibuffer-message "%s" clean))))
+
+(defun my/nim-eldoc-cleanup-effects (format-string &rest args)
+  "Drop Nim LSP effect markers like \"try !IOError\" from Eldoc strings."
+  (when format-string
+    (let* ((raw (apply #'format format-string args))
+           (clean raw))
+      ;; Remove Nim effect annotations/pragmas anywhere in the string.
+      (setq clean (replace-regexp-in-string "\\s-+try\\b" "" clean))
+      (setq clean (replace-regexp-in-string "\\s-+![^ \t\n(){}\\[\\],;]+" "" clean))
+      (setq clean (replace-regexp-in-string "{\\.[^}]*\\}" "" clean))
+      ;; Collapse any leftover repeated whitespace.
+      (setq clean (replace-regexp-in-string "[ \t]+" " " clean))
+      ;; Reuse the markdown/newline cleanup to keep output tidy.
+      (my/eldoc-cleanup-markdown-code-fence "%s" clean))))
+
+(defun my/nim-eglot-eldoc-filter (callback &rest _ignored)
+  "Request Eldoc from Eglot and strip Nim effect noise before CALLBACK."
+  (when (fboundp 'eglot-eldoc-function)
+    (eglot-eldoc-function
+     (lambda (&rest docs)
+       (let* ((cleaned (mapcar (lambda (doc)
+                                 (my/nim-eldoc-cleanup-effects "%s" doc))
+                               docs))
+              (non-empty (seq-remove #'string-empty-p cleaned)))
+         (when non-empty
+           (apply callback non-empty)))))))
+
+(defun my/eglot-server-program-for-mode ()
+  "Return the Eglot server program for the current buffer, if configured."
+  (when (boundp 'eglot-server-programs)
+    (seq-some
+     (lambda (entry)
+       (let ((modes (car entry))
+             (program (cdr entry)))
+         (cond
+          ((symbolp modes)
+           (when (derived-mode-p modes) program))
+          ((and (listp modes) (seq-every-p #'symbolp modes))
+           (when (apply #'derived-mode-p modes) program))
+          ((functionp modes)
+           (when (funcall modes major-mode) program))
+          (t nil))))
+     eglot-server-programs)))
+
+(defun my/eglot-server-available-p ()
+  "Return non-nil when a configured Eglot server executable is available."
+  (when-let* ((program (my/eglot-server-program-for-mode)))
+    (let ((cmd (if (functionp program) (funcall program) program)))
+      (when (listp cmd)
+        (let ((exe (car cmd)))
+          (and (stringp exe) (executable-find exe)))))))
+
+(defun my/eglot-ensure-maybe ()
+  "Start Eglot only when a server is configured and available."
+  (if (and (derived-mode-p 'scheme-mode)
+           (not (my/guile-lsp-command)))
+      (when (bound-and-true-p eglot-managed-mode)
+        (eglot-managed-mode -1))
+    (when (my/eglot-server-available-p)
+      (eglot-ensure))))
+
 (use-package line-reminder
   :ensure t
   :config
-  (global-line-reminder-mode t)
-  (setq line-reminder-show-option 'linum))
+  (global-line-reminder-mode t))
   
 (use-package eldoc-box
   :ensure t
   :config
+  (setq eldoc-box-frame-parameters
+        '((internal-border-width . 2)
+          (left-fringe . 0)
+          (right-fringe . 0)
+          (undecorated . t)))
+
+  (defun my/eldoc-box-border-style (_parent-frame)
+    "Style the eldoc-box child frame with a dark pastel border."
+    (let ((frame (selected-frame)))
+      (when (frame-live-p frame)
+        (set-frame-parameter frame 'internal-border-width 6)
+        (set-face-attribute 'eldoc-box-border frame
+                            :background "#2f3e46")
+        (when (facep 'child-frame-border)
+          (set-face-background 'child-frame-border "#2f3e46" frame))
+        (set-face-attribute 'eldoc-box-body frame
+                            :background "#0f1218"
+                            :foreground (face-foreground 'default nil t)
+                            :box nil))))
+
+  (add-hook 'eldoc-box-frame-hook #'my/eldoc-box-border-style)
   (eldoc-box-hover-at-point-mode 1))
+
+(defun my/eldoc-box-fontify-markdown (&rest _)
+  "Use Markdown/GFM font-lock (including fenced code) in eldoc popovers."
+  (when (require 'markdown-mode nil t)
+    (cl-pushnew '("nim" . nim-mode) markdown-code-lang-modes :test #'equal)
+    (gfm-view-mode)
+    (font-lock-ensure)))
+(add-hook 'eldoc-box-buffer-hook #'my/eldoc-box-fontify-markdown)
 
 (use-package eglot
   :ensure t
   :requires (eldoc-box)
   :hook
-  (prog-mode . eglot-ensure)
+  (prog-mode . my/eglot-ensure-maybe)
   :config
+  ;; Disable inlay hints globally unless explicitly re-enabled elsewhere.
+  (add-to-list 'eglot-ignored-server-capabilities :inlayHintProvider)
   (defun my/eglot-setup-keys ()
     "Keep Eglot bindings consistent across languages (clang, TS, etc.)."
     (local-set-key (kbd "M-<return>") #'eglot-code-actions)
@@ -137,6 +263,9 @@ INTERACTIVE is ignored; always fetches the buffer silently."
     (local-set-key (kbd "C-c h") #'my/eldoc-show-help)
     (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help))
   (add-hook 'eglot-managed-mode-hook #'my/eglot-setup-keys)
+  (add-hook 'eglot-managed-mode-hook
+            (lambda ()
+              (setq-local eldoc-message-function #'my/eldoc-cleanup-markdown-code-fence)))
   (add-hook 'eglot-managed-mode-hook #'flymake-mode)
   (defun my/clangd-command ()
     ;; Prefer system clangd; keeps args centralized.
@@ -160,7 +289,22 @@ INTERACTIVE is ignored; always fetches the buffer silently."
                '((yaml-mode yaml-ts-mode)
                  . ("yaml-language-server" "--stdio"))))
 
+(use-package scheme
+  :ensure nil
+  :init
+  (add-to-list 'auto-mode-alist '("\\.scm\\'" . scheme-mode))
+  (add-to-list 'auto-mode-alist '("\\.sld\\'" . scheme-mode)))
 
+(defun my/guile-lsp-command ()
+  "Return the Guile LSP command list when available."
+  (cond
+   ((executable-find "guile-lsp-server") (list "guile-lsp-server"))
+   ((executable-find "guile-lsp") (list "guile-lsp"))
+   (t nil)))
+
+(with-eval-after-load 'eglot
+  (when-let* ((cmd (my/guile-lsp-command)))
+    (add-to-list 'eglot-server-programs `((scheme-mode) . ,cmd))))
 
 (defun my/c-style ()
   (setq-local c-basic-offset 4
@@ -175,7 +319,74 @@ INTERACTIVE is ignored; always fetches the buffer silently."
   (setq typescript-indent-level 2)
   :hook
   ((typescript-mode typescript-ts-mode tsx-ts-mode js-mode js-ts-mode json-mode yaml-mode)
-   . my/node-add-bin-to-path))
+   . my/node-add-bin-to-path)
+  ((typescript-mode typescript-ts-mode tsx-ts-mode js-mode js-ts-mode)
+   . my/typescript-eldoc-box-prettify))
+
+(defun my/typescript-eldoc-box-prettify ()
+  "Prettify TS/JS Eldoc popups by using eldoc-box' TS formatter."
+  (when (require 'eldoc-box nil t)
+    (add-hook 'eldoc-box-buffer-setup-hook #'eldoc-box-prettify-ts-errors 0 t)))
+
+;; Nim config - use nimlangserver via Eglot.
+(load "nim-mode.el")
+(require 'json)
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '((nim-mode nimscript-mode) . ("nimlangserver"))))
+
+(defun my/nim-safe-indent ()
+  "Indent Nim safely; fall back instead of throwing SMIE errors."
+  (interactive)
+  (condition-case err
+      (nim-indent-line)
+    (error
+     (message "Nim indent fallback: %s" (error-message-string err))
+     (indent-relative))))
+
+(defun my/nim-safe-forward-sexp (arg)
+  "Move forward across Nim sexps safely, falling back on errors.
+ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
+  (interactive "p")
+  (condition-case err
+      ;; Bind `forward-sexp-function' to nil so any nested `forward-sexp' calls
+      ;; use the built-in implementation and avoid recursive loops.
+      (let ((forward-sexp-function nil))
+        (if (fboundp 'smie-forward-sexp)
+            (smie-forward-sexp arg)
+          (forward-sexp arg)))
+    (error
+     (message "Nim sexp fallback: %s" (error-message-string err))
+     (let ((forward-sexp-function nil))
+       (forward-sexp arg)))))
+
+(add-hook 'eglot-managed-mode-hook
+          (lambda ()
+            (when (derived-mode-p 'nim-mode 'nimscript-mode)
+              ;; Replace default Eglot Eldoc provider with a Nim-filtered version.
+              (setq-local eldoc-documentation-functions
+                          (cons #'my/nim-eglot-eldoc-filter
+                                (remove #'eglot-eldoc-function eldoc-documentation-functions)))
+              (setq-local eldoc-message-function #'my/nim-eldoc-cleanup-effects)
+              ;; Force inlay hints off for Nim buffers even if globally enabled.
+              (when (boundp 'eglot-inlay-hints-mode)
+                (eglot-inlay-hints-mode -1)))))
+(defun my/nim-setup-eglot ()
+  "Configure Nim LSP to disable all inlay hints and start Eglot."
+  (setq-local eglot-workspace-configuration
+              '(:nim (:inlayHints (:typeHints json-false
+                                       :exceptionHints json-false
+                                       :parameterHints json-false))))
+  ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
+  (setq-local indent-line-function #'my/nim-safe-indent)
+  ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
+  (setq-local forward-sexp-function #'my/nim-safe-forward-sexp)
+  ;; Ensure Eglot inlay hints minor mode stays off in Nim buffers.
+  (when (boundp 'eglot-inlay-hints-mode)
+    (eglot-inlay-hints-mode -1))
+  (eglot-ensure))
+(add-hook 'nim-mode-hook #'my/nim-setup-eglot)
+(add-hook 'nimscript-mode-hook #'my/nim-setup-eglot)
 
 (use-package yaml-mode
   :ensure t
@@ -192,6 +403,19 @@ INTERACTIVE is ignored; always fetches the buffer silently."
   :init
   (setq inferior-lisp-program "/usr/bin/sbcl"
         parinfer-rust-auto-download t)
+  :config
+  (defun my/parinfer-rust-ignore-quit (orig &rest args)
+    "Ignore `minibuffer-quit' errors from Parinfer checks."
+    (condition-case err
+        (apply orig args)
+      (quit nil)))
+  (advice-add 'parinfer-rust--check-for-issues :around #'my/parinfer-rust-ignore-quit)
+  (defun my/parinfer-rust-auto-accept-indentation (orig &rest args)
+    "Automatically accept Parinfer indentation fixes without prompting."
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _args) t)))
+      (apply orig args)))
+  (advice-add 'parinfer-rust--check-for-indentation :around
+              #'my/parinfer-rust-auto-accept-indentation)
   :hook
   ((emacs-lisp-mode
     lisp-mode
@@ -203,6 +427,182 @@ INTERACTIVE is ignored; always fetches the buffer silently."
    . (lambda ()
        (setq indent-tabs-mode nil)
        (parinfer-rust-mode 1))))
+
+(use-package eros
+  :ensure t
+  :config
+  (eros-mode))
+
+(use-package geiser
+  :ensure t
+  :init
+  (setq geiser-default-implementation 'guile
+        geiser-repl-per-project-p nil
+        geiser-repl-use-other-window t
+        geiser-repl-history-filename (expand-file-name "geiser-history"
+                                                       user-emacs-directory))
+  :config
+  (defun my/guile-repl-buffer ()
+    "Return the current Guile REPL buffer, if any."
+    (when (require 'geiser-repl nil t)
+      (geiser-repl--repl/impl 'guile)))
+
+  (defun my/guile-repl-visible-p ()
+    "Return non-nil when the Guile REPL buffer is visible."
+    (when-let* ((buf (my/guile-repl-buffer)))
+      (get-buffer-window buf 'visible)))
+
+  (defun my/guile-repl-live-p ()
+    "Return non-nil when a Guile Geiser REPL is available."
+    (when-let* ((buf (my/guile-repl-buffer)))
+      (when (buffer-live-p buf)
+        (let ((proc (get-buffer-process buf)))
+          (and proc (process-live-p proc))))))
+
+  (defun my/guile-attach-repl ()
+    "Associate the current Scheme buffer with the shared Guile REPL."
+    (when (require 'geiser-repl nil t)
+      (when-let* ((buf (my/guile-repl-buffer)))
+        (geiser-repl--set-this-buffer-repl buf))))
+
+  (defun my/guile-repl ()
+    "Start or switch to a Guile Geiser REPL."
+    (interactive)
+    (require 'geiser-repl)
+    (let ((geiser-default-implementation 'guile))
+      (geiser 'guile)
+      (when (fboundp 'geiser-repl)
+        (geiser-repl))))
+
+  (defun my/guile-show-repl ()
+    "Show the Guile REPL in a split if it isn't visible."
+    (when-let* ((buf (my/guile-repl-buffer)))
+      (unless (my/guile-repl-visible-p)
+        (display-buffer
+         buf
+         '((display-buffer-reuse-window
+            display-buffer-below-selected)
+           (window-height . 0.3))))))
+
+  (defun my/guile-auto-repl ()
+    "Start a Guile REPL without stealing focus."
+    (when (require 'geiser-repl nil t)
+      (unless (my/guile-repl-live-p)
+        (let ((geiser-default-implementation 'guile))
+          (save-window-excursion
+            (geiser 'guile)
+            (when (fboundp 'geiser-repl)
+              (geiser-repl)))))))
+
+  (defun my/guile-ensure-repl ()
+    "Ensure a Guile REPL exists, starting one if needed."
+    (require 'geiser-repl nil t)
+    (require 'geiser-guile nil t)
+    (let* ((binary (or (and (boundp 'geiser-guile-binary) geiser-guile-binary)
+                       "guile"))
+           (exe (and (stringp binary) (executable-find binary))))
+      (if (not exe)
+          (message "Geiser: %s not found on PATH; cannot start Guile REPL" binary)
+        (unless (my/guile-repl-live-p)
+          (my/guile-auto-repl))
+        (if (my/guile-repl-live-p)
+            (my/guile-show-repl)
+          (message "Geiser: REPL failed to start; check *Geiser Log*")))))
+
+  (defun my/guile-eval-last-sexp-at-point ()
+    "Evaluate the last sexp and show the result at point."
+    (interactive)
+    (my/guile-ensure-repl)
+    (let* ((bounds (or (bounds-of-thing-at-point 'sexp)
+                       (save-excursion
+                         (ignore-errors
+                           (let ((end (point)))
+                             (backward-sexp)
+                             (cons (point) end))))))
+           (beg (car-safe bounds))
+           (end (cdr-safe bounds)))
+      (unless (and beg end)
+        (user-error "No s-expression at point"))
+      (let* ((code (buffer-substring-no-properties beg end))
+             (ret (geiser-eval--send/wait code))
+             (result (if (geiser-eval--retort-error ret)
+                         (geiser-eval--error-str (geiser-eval--retort-error ret))
+                       (geiser-eval--retort-result-str ret nil))))
+        (cond
+         ((fboundp 'eros--eval-overlay)
+          (eros--eval-overlay result end))
+         ((fboundp 'eros-eval-overlay)
+          (eros-eval-overlay result end))
+         (t
+          (message "%s" result))))))
+
+  (defun my/geiser-capf-for-symbol (&optional predicate)
+    "Guard Geiser symbol completion until a REPL exists."
+    (when (my/guile-repl-live-p)
+      (geiser-capf--for-symbol predicate)))
+
+  (defun my/geiser-capf-for-module (&optional predicate)
+    "Guard Geiser module completion until a REPL exists."
+    (when (my/guile-repl-live-p)
+      (geiser-capf--for-module predicate)))
+
+  (defun my/guile-find-definition ()
+    "Jump to the symbol at point using Geiser when available."
+    (interactive)
+    (if (fboundp 'geiser-edit-symbol-at-point)
+        (geiser-edit-symbol-at-point)
+      (call-interactively #'xref-find-definitions)))
+
+  (defun my/guile-setup-keys ()
+    (setq-local indent-tabs-mode nil)
+    (local-set-key (kbd "M-<return>") #'geiser-eval-definition)
+    (local-set-key (kbd "C-c f") #'my/format-buffer)
+    (local-set-key (kbd "C-c d") #'my/guile-find-definition)
+    (local-set-key (kbd "C-c b") #'xref-pop-marker-stack)
+    (local-set-key (kbd "C-c h") #'geiser-doc-symbol)
+    (local-set-key (kbd "C-c e") #'geiser-eval-last-sexp)
+    (local-set-key (kbd "C-c C-c") #'my/guile-eval-last-sexp-at-point)
+    (local-set-key (kbd "C-c r") #'geiser-eval-region)
+    (local-set-key (kbd "C-c B") #'geiser-eval-buffer)
+    (local-set-key (kbd "C-c z") #'my/guile-repl)
+    (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help))
+
+  (defvar-local my/guile--geiser-retry-count 0
+    "Retries left for enabling Geiser in the current Scheme buffer.")
+
+  (defun my/guile-enable-geiser-mode ()
+    "Enable Geiser once the REPL is available."
+    (when (> my/guile--geiser-retry-count 0)
+      (if (my/guile-repl-live-p)
+          (progn
+            (my/guile-attach-repl)
+            (geiser-mode 1)
+            (my/guile-show-repl))
+        (setq my/guile--geiser-retry-count (1- my/guile--geiser-retry-count))
+        (run-at-time 0.2 nil #'my/guile-enable-geiser-mode))))
+
+  (defun my/guile-scheme-setup ()
+    "Initialize Geiser, completion, and REPL for Scheme buffers."
+    (my/guile-ensure-repl)
+    (setq my/guile--geiser-retry-count 15)
+    (my/guile-enable-geiser-mode)
+    (remove-hook 'completion-at-point-functions
+                 #'geiser-capf--for-symbol t)
+    (remove-hook 'completion-at-point-functions
+                 #'geiser-capf--for-module t)
+    (add-hook 'completion-at-point-functions
+              #'my/geiser-capf-for-module nil t)
+    (add-hook 'completion-at-point-functions
+              #'my/geiser-capf-for-symbol nil t))
+
+  (add-hook 'scheme-mode-hook #'my/guile-scheme-setup -10)
+  (add-hook 'scheme-mode-hook #'my/guile-setup-keys))
+
+(use-package geiser-guile
+  :ensure t
+  :after geiser
+  :config
+  (setq geiser-guile-binary (or (executable-find "guile") "guile")))
 
 (use-package sly
   :ensure t
@@ -434,7 +834,28 @@ SYSTEM is prompted as a symbol name without the leading colon."
   :ensure t
   :config
   (projectile-mode 1)
-  (define-key projectile-mode-map (kbd "C-c p") 'projectile-command-map))
+  (defun my/consult-projectile-find-file ()
+    "Find a project file with Consult, showing an initial list and preview."
+    (interactive)
+    (require 'consult)
+    (let* ((root (or (when (fboundp 'projectile-project-root)
+                       (ignore-errors (projectile-project-root)))
+                     default-directory))
+           (default-directory root)
+           (files (if (fboundp 'projectile-current-project-files)
+                      (projectile-current-project-files)
+                    (directory-files-recursively root ".*" t)))
+           (state (consult--file-preview)))
+      (when-let* ((file (consult--read
+                         files
+                         :prompt "Project file: "
+                         :category 'file
+                         :require-match t
+                         :sort nil
+                         :state state)))
+        (find-file (expand-file-name file root)))))
+
+  (define-key projectile-mode-map (kbd "C-c p") #'my/consult-projectile-find-file))
 
 ;; package management (straight.el or use-package)
 (use-package vertico
@@ -442,7 +863,10 @@ SYSTEM is prompted as a symbol name without the leading colon."
   :config (vertico-mode))
 
 (use-package consult
-  :ensure t)
+  :ensure t
+  :config
+  ;; Live preview while moving through Consult candidates (hit M-. to force when debounced).
+  (setq consult-preview-key '(:debounce 0.2 any)))
 
 (use-package embark
   :ensure t
@@ -466,6 +890,13 @@ SYSTEM is prompted as a symbol name without the leading colon."
   :hook
   (embark-collect-mode . consult-preview-at-point-mode))
 
+(use-package markdown-mode
+  :ensure t
+  :config
+  (setq markdown-fontify-code-blocks-natively t
+        markdown-enable-highlighting-syntax t
+        markdown-hide-markup t))
+
 (use-package marginalia
   :ensure t
   :config (marginalia-mode))
@@ -481,120 +912,25 @@ SYSTEM is prompted as a symbol name without the leading colon."
   (defun my/corfu-disable-in-minibuffer ()
     (when (minibufferp)
       (corfu-mode -1)))
-  (add-hook 'minibuffer-setup-hook #'my/corfu-disable-in-minibuffer))
+  (add-hook 'minibuffer-setup-hook #'my/corfu-disable-in-minibuffer)
 
-(use-package nim-mode
-  :ensure t
-  :init
-  (defun my/nim-eglot-server ()
-    ;; Prefer nimlangserver (matches lsp-nim-langserver config) and
-    ;; fall back to nimlsp if that's what's available.
-    (or (executable-find "nimlangserver")
-        (executable-find "nimlsp")
-        "nimlangserver"))
-  :config
-  (with-eval-after-load 'eglot
-    (add-to-list 'eglot-server-programs
-                 `(nim-mode . ,(list (my/nim-eglot-server))))))
+  ;; Nim completions can be heavy; keep Corfu but disable auto popup there.
+  (add-hook 'nim-mode-hook
+            (lambda ()
+              (setq-local corfu-auto nil))))
 
+(use-package dockerfile-mode
+  :ensure
+  :config)
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
- '(custom-safe-themes
-   '("f9d423fcd4581f368b08c720f04d206ee80b37bfb314fa37e279f554b6f415e9"
-     default))
- '(package-selected-packages
-   '(catppuccin-theme corfu doom-modeline eldoc-box embark-consult
-                      json-mode line-reminder marginalia
-                      multiple-cursors nim-mode parinfer-rust-mode
-                      shell-pop sly-quicklisp treemacs-icons-dired
-                      treemacs-magit treemacs-projectile
-                      typescript-mode vertico volatile-highlights
-                      yaml-mode yascroll zoom)))
+ '(package-selected-packages nil))
 (custom-set-faces)
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- 
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- 
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- 
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
-
-;; custom-set-faces was added by Custom.
-;; If you edit it by hand, you could mess it up, so be careful.
-;; Your init file should contain only one such instance.
-;; If there is more than one, they won't work right.
