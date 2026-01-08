@@ -7,6 +7,9 @@
 (require 'seq)
 (require 'cl-lib)
 
+;; Avoid auto-loading TAGS files (ntagger emits ctags format).
+(setq tags-add-tables nil)
+
 ;; Disable backup (~), auto-save (#), and lock (.#) files.
 (setq make-backup-files nil
       auto-save-default nil
@@ -39,7 +42,9 @@
 (let ((wallust-theme (expand-file-name "wallust-theme.el" user-emacs-directory)))
   (when (file-exists-p wallust-theme)
     (load-file wallust-theme)
-    (load-theme 'wallust t)))
+    (load-theme 'wallust t))
+  (unless (custom-theme-enabled-p 'wallust)
+    (load-theme 'wheatgrass t)))
 (tool-bar-mode -1)
 (scroll-bar-mode -1)
 (menu-bar-mode -1)
@@ -234,6 +239,8 @@ INTERACTIVE is ignored; always fetches the buffer silently."
 (use-package line-reminder
   :ensure t
   :config
+  ;; Avoid linum (deprecated in Emacs 30); use fringe indicators instead.
+  (setq line-reminder-show-option 'indicators)
   (global-line-reminder-mode t))
   
 (use-package eldoc-box
@@ -465,12 +472,28 @@ INTERACTIVE is ignored; always fetches the buffer silently."
 (add-hook 'python-ts-mode-hook #'my/python-setup-eglot)
 
 ;; Nim config - nimsuggest for docs, nim check for diagnostics.
-(load "nim-mode.el")
-(require 'nim-suggest)
-(let ((nimble-nimsuggest (expand-file-name "~/.nimble/bin/nimsuggest")))
-  (setq nimsuggest-path
-        (or (executable-find "nimsuggest")
-            (when (file-executable-p nimble-nimsuggest) nimble-nimsuggest))))
+(add-to-list 'load-path (expand-file-name "lisp" user-emacs-directory))
+
+(use-package nim-mode
+  :ensure nil
+  :mode (("\\.nim\\'" . nim-mode)
+         ("\\.nimble\\'" . nim-mode))
+  :init
+  (require 'nim-mode nil t))
+
+(let ((nim-suggest-local (expand-file-name "lisp/nim-suggest.el" user-emacs-directory)))
+  (when (file-exists-p nim-suggest-local)
+    (add-to-list 'load-path (expand-file-name "lisp" user-emacs-directory))))
+
+(with-eval-after-load 'nim-mode
+  (condition-case err
+      (require 'nim-suggest)
+    (error
+     (message "Nim suggest skipped: %s" (error-message-string err))))
+  (let ((nimble-nimsuggest (expand-file-name "~/.nimble/bin/nimsuggest")))
+    (setq nimsuggest-path
+          (or (executable-find "nimsuggest")
+              (when (file-executable-p nimble-nimsuggest) nimble-nimsuggest)))))
 (use-package flycheck
   :ensure t)
 
@@ -501,7 +524,8 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
 
 (defun my/nim-setup-nimsuggest ()
   "Configure Nim docs via nimsuggest and diagnostics via nim check."
-  (nimsuggest-mode 1)
+  (when (fboundp 'nimsuggest-mode)
+    (nimsuggest-mode 1))
   ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
   (setq-local indent-line-function #'my/nim-safe-indent)
   ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
@@ -510,6 +534,218 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   (setq-local flycheck-checker 'nim))
 (add-hook 'nim-mode-hook #'my/nim-setup-nimsuggest)
 (add-hook 'nimscript-mode-hook #'my/nim-setup-nimsuggest)
+
+;; TAGS generation via ntagger on first xref jump.
+(defvar my/ntagger-roots (make-hash-table :test 'equal))
+(defvar my/ntagger-installing nil)
+
+(defun my/ntagger-project-root ()
+  "Return the current project root for TAGS generation."
+  (or (when (fboundp 'projectile-project-root)
+        (ignore-errors (projectile-project-root)))
+      (when-let* ((proj (project-current nil)))
+        (car (project-roots proj)))
+      (locate-dominating-file default-directory ".git")
+      (locate-dominating-file default-directory "nimble.lock")
+      default-directory))
+
+(defun my/ntagger-installed-p ()
+  "Return non-nil when ntagger is available."
+  (executable-find "ntagger"))
+
+(defun my/ntagger-install ()
+  "Install ntagger using nimble when missing."
+  (when (and (not (my/ntagger-installed-p))
+             (executable-find "nimble")
+             (not my/ntagger-installing))
+    (setq my/ntagger-installing t)
+    (let ((buf (get-buffer-create "*ntagger-install*")))
+      (with-current-buffer buf
+        (erase-buffer))
+      (message "Installing ntagger via nimble...")
+      (let ((exit-code (call-process "nimble" nil buf t
+                                     "install" "https://github.com/elcritch/ntagger")))
+        (setq my/ntagger-installing nil)
+        (if (and (numberp exit-code) (zerop exit-code))
+            (message "ntagger installed.")
+          (message "ntagger install failed; see *ntagger-install*"))))))
+
+(defun my/ntagger-ensure-gitignore (root tags-file)
+  "Add TAGS to .gitignore in ROOT when TAGS-FILE exists."
+  (let ((gitignore (expand-file-name ".gitignore" root)))
+    (when (and (file-exists-p gitignore) (file-exists-p tags-file))
+      (with-temp-buffer
+        (insert-file-contents gitignore)
+        (unless (re-search-forward "^/?TAGS$" nil t)
+          (goto-char (point-max))
+          (unless (or (bobp) (eq (char-before) ?\n))
+            (insert "\n"))
+          (insert "TAGS\n")
+          (write-region (point-min) (point-max) gitignore nil 'quiet))))))
+
+(defvar my/ntagger-include-nimble-deps t
+  "When non-nil, include Nimble deps listed in *.nimble.")
+
+(defvar my/ntagger-exclude-patterns
+  '("deps" "gen_qcborcommon.nim" "/tests" "tests/")
+  "Substring patterns to exclude from ntagger scans.")
+
+(defun my/ntagger-find-nimble-file (root)
+  "Return the first *.nimble file in ROOT."
+  (car (directory-files root t "\\.nimble\\'")))
+
+(defun my/ntagger-parse-nimble-deps (nimble-file)
+  "Parse NIMBLE-FILE and return a list of dependency names."
+  (let (deps)
+    (with-temp-buffer
+      (insert-file-contents nimble-file)
+      (goto-char (point-min))
+      (while (re-search-forward "^\\s-*requires\\b" nil t)
+        (let ((line-end (line-end-position)))
+          (while (re-search-forward "\"\\([^\"]+\\)\"" line-end t)
+            (let* ((spec (match-string 1))
+                   (name (car (split-string spec "[[:space:]]+" t))))
+              (when (and name (not (string-empty-p name)))
+                (push name deps)))))))
+    (delete-dups (nreverse deps))))
+
+(defun my/ntagger-nimble-pkg-dir (name)
+  "Return the newest pkgs2 directory for NAME, if any."
+  (let* ((base (expand-file-name "~/.nimble/pkgs2"))
+         (pattern (concat "^" (regexp-quote name) "-"))
+         (candidates (when (file-directory-p base)
+                       (directory-files base t pattern))))
+    (when candidates
+      (car (sort candidates
+                 (lambda (a b)
+                   (time-less-p
+                    (file-attribute-modification-time (file-attributes b))
+                    (file-attribute-modification-time (file-attributes a)))))))))
+
+(defun my/ntagger-nimble-dep-dirs (root)
+  "Return Nimble dependency directories for ROOT."
+  (let ((nimble (my/ntagger-find-nimble-file root)))
+    (when nimble
+      (let* ((deps (my/ntagger-parse-nimble-deps nimble))
+             (dirs (delq nil (mapcar #'my/ntagger-nimble-pkg-dir deps))))
+        (delete-dups dirs)))))
+
+(defun my/ntagger-generate-tags (root)
+  "Generate TAGS in ROOT using ntagger."
+  (let ((default-directory root)
+        (buf (get-buffer-create "*ntagger*"))
+        (args (list "-f" "TAGS" "--private" "--system"))
+        (roots (list ".")))
+    (when my/ntagger-include-nimble-deps
+      (setq roots (append roots (my/ntagger-nimble-dep-dirs root))))
+    (dolist (pat my/ntagger-exclude-patterns)
+      (setq args (append args (list "--exclude" pat))))
+    (setq args (append args roots))
+    (with-current-buffer buf
+      (erase-buffer))
+    (let ((exit-code (apply #'call-process "ntagger" nil buf t args)))
+      (if (and (numberp exit-code) (zerop exit-code))
+          t
+        (message "ntagger failed; see *ntagger*")
+        nil))))
+
+(defun my/ntagger-tags-file (root)
+  "Return the TAGS file path for ROOT."
+  (when root
+    (expand-file-name "TAGS" root)))
+
+(defun my/ntagger-ensure-tags ()
+  "Ensure TAGS exist for the current Nim project."
+  (when (derived-mode-p 'nim-mode)
+    (let* ((root (my/ntagger-project-root))
+           (tags-file (my/ntagger-tags-file root)))
+      (when (and root tags-file)
+        (unless (my/ntagger-installed-p)
+          (my/ntagger-install))
+        (when (my/ntagger-installed-p)
+          (my/ntagger-generate-tags root))
+        (when (file-exists-p tags-file)
+          (my/ntagger-ensure-gitignore root tags-file))))))
+
+(defun my/ntagger-regenerate ()
+  "Regenerate TAGS for the current Nim project."
+  (interactive)
+  (let* ((root (my/ntagger-project-root))
+         (tags-file (my/ntagger-tags-file root)))
+    (unless (and root tags-file)
+      (user-error "No project root found for TAGS generation"))
+    (unless (my/ntagger-installed-p)
+      (my/ntagger-install))
+    (when (my/ntagger-installed-p)
+      (if (my/ntagger-generate-tags root)
+          (progn
+            (my/ntagger-ensure-gitignore root tags-file)
+            (message "ntagger: TAGS regenerated"))
+        (message "ntagger: TAGS generation failed")))))
+
+(defun my/ntagger-xref-advice (orig-fn &rest args)
+  "Ensure ntagger TAGS exist before xref jumps."
+  (my/ntagger-ensure-tags)
+  (apply orig-fn args))
+
+(dolist (fn '(xref-find-definitions
+              xref-find-definitions-other-window
+              xref-find-definitions-other-frame
+              xref-find-references))
+  (when (fboundp fn)
+    (advice-add fn :around #'my/ntagger-xref-advice)))
+
+(defun my/ntagger--parse-tags (tags-file symbol)
+  "Return xref matches for SYMBOL in TAGS-FILE."
+  (let (matches)
+    (with-temp-buffer
+      (insert-file-contents tags-file)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position)
+                     (line-end-position))))
+          (unless (or (string-prefix-p "!_" line) (string-empty-p line))
+            (when (string-match "^\\([^\t]+\\)\t\\([^\t]+\\)\t[^;]*;\"\\(.*\\)$" line)
+              (let* ((name (match-string 1 line))
+                     (file (match-string 2 line))
+                     (rest (match-string 3 line)))
+                (when (string= name symbol)
+                  (when (string-match "line:\\([0-9]+\\)" rest)
+                    (let* ((line-num (string-to-number (match-string 1 rest)))
+                           (path (if (file-name-absolute-p file)
+                                     file
+                                   (expand-file-name file (file-name-directory tags-file)))))
+                      (push (xref-make name
+                                       (xref-make-file-location path line-num 1))
+                            matches))))))))
+        (forward-line 1)))
+    (nreverse matches)))
+
+(defun my/nim-xref-backend ()
+  "Use ntagger TAGS for Nim xref."
+  (when (derived-mode-p 'nim-mode)
+    'nim-ntagger))
+
+(with-eval-after-load 'xref
+  (add-hook 'xref-backend-functions #'my/nim-xref-backend t)
+  (defun my/nim-xref-setup ()
+    "Prefer ntagger tags in Nim buffers."
+    (setq-local tags-add-tables nil)
+    (setq-local xref-backend-functions '(my/nim-xref-backend))
+    (setq-local tags-table-list nil))
+  (add-hook 'nim-mode-hook #'my/nim-xref-setup)
+  (cl-defmethod xref-backend-identifier-at-point ((_backend (eql nim-ntagger)))
+    (thing-at-point 'symbol t))
+  (cl-defmethod xref-backend-definitions ((_backend (eql nim-ntagger)) symbol)
+    (my/ntagger-ensure-tags)
+    (let* ((root (my/ntagger-project-root))
+           (tags-file (my/ntagger-tags-file root)))
+      (if (and tags-file (file-exists-p tags-file))
+          (my/ntagger--parse-tags tags-file symbol)
+        (user-error "No TAGS file found in project root"))))
+  (cl-defmethod xref-backend-references ((_backend (eql nim-ntagger)) _symbol)
+    nil))
 
 (use-package yaml-mode
   :ensure t
@@ -961,7 +1197,8 @@ SYSTEM is prompted as a symbol name without the leading colon."
       (`(t . _)
        (treemacs-git-mode 'simple)))
 
-    (treemacs-hide-gitignored-files-mode nil))
+    (treemacs-hide-gitignored-files-mode nil)
+    (treemacs-start-on-boot))
   :bind
   (:map global-map
         ("M-0"       . treemacs-select-window)
@@ -983,8 +1220,6 @@ SYSTEM is prompted as a symbol name without the leading colon."
 (use-package treemacs-magit
   :after (treemacs magit)
   :ensure t)
-
-(treemacs-start-on-boot)
 
 (use-package projectile
   :ensure t
@@ -1094,12 +1329,15 @@ SYSTEM is prompted as a symbol name without the leading colon."
       (set-face-attribute 'mode-line-inactive nil :background black)
       (set-face-attribute 'header-line nil :background black)))
   (defun my/wallust-load-theme ()
-    (when (file-exists-p wallust-theme)
-      (load-file wallust-theme)
-      (load-theme wallust-theme-name t)
-      (my/wallust-force-black-background)))
+    (if (file-exists-p wallust-theme)
+        (progn
+          (load-file wallust-theme)
+          (load-theme wallust-theme-name t)
+          (my/wallust-force-black-background))
+      (load-theme 'wheatgrass t)))
   (my/wallust-load-theme)
-  (when (fboundp 'file-notify-add-watch)
+  (when (and (file-exists-p wallust-theme)
+             (fboundp 'file-notify-add-watch))
     (file-notify-add-watch
      wallust-theme
      '(change)
