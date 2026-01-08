@@ -16,7 +16,7 @@
     (local-set-key (kbd "C-c d") #'xref-find-definitions)
     (local-set-key (kbd "C-c b") #'xref-pop-marker-stack)
     (local-set-key (kbd "C-c h") #'my/eldoc-show-help)
-    (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help))
+    (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart))
   (add-hook 'eglot-managed-mode-hook #'my/eglot-setup-keys)
   (add-hook 'eglot-managed-mode-hook
             (lambda ()
@@ -271,8 +271,10 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   (when (fboundp 'nimsuggest-mode)
     (nimsuggest-mode 1))
   (when (fboundp 'nimsuggest-eldoc--nimsuggest)
-    (setq-local eldoc-documentation-function #'nimsuggest-eldoc--nimsuggest))
-  (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help)
+    (setq-local eldoc-documentation-function
+                (lambda (&rest _args)
+                  (nimsuggest-eldoc--nimsuggest))))
+  (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart)
   (setq-local tags-file-name nil)
   ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
   (setq-local indent-line-function #'my/nim-safe-indent)

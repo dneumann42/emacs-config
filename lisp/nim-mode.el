@@ -8,6 +8,11 @@
 (defvar nim-eldoc--skip-regex "\\s-+")
 (defvar nimsuggest-options nil)
 (defvar nimsuggest-local-options nil)
+(defvar nim-dotty-syntax-table
+  (let ((st (make-syntax-table)))
+    (modify-syntax-entry ?. "_" st)
+    st)
+  "Syntax table for dotted identifiers in Nim.")
 
 (defun nim-current-symbol ()
   "Return the Nim symbol at point."

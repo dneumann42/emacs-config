@@ -99,7 +99,7 @@
 
 (global-set-key (kbd "C-c t n") #'tab-line-switch-to-next-tab)
 (global-set-key (kbd "C-c t p") #'tab-line-switch-to-prev-tab)
-(global-set-key (kbd "C-M-<return>") #'my/eldoc-show-help)
+(global-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart)
 (global-set-key (kbd "C-x /") #'my/consult-ripgrep-project)
 
 (defun my/consult-ripgrep-project ()
@@ -127,7 +127,56 @@
     (when (and eldoc--doc-buffer
                (buffer-live-p eldoc--doc-buffer)
                (not (equal "" (with-current-buffer eldoc--doc-buffer (buffer-string)))))
-      (eldoc-box-help-at-point))))
+      (if (display-graphic-p)
+          (eldoc-box-help-at-point)
+        (display-buffer eldoc--doc-buffer)))))
+
+(defvar my/eldoc-focus-window nil)
+(defvar my/eldoc-focus-frame nil)
+
+(defun my/eldoc-show-help-window ()
+  "Show eldoc in a regular window and focus it."
+  (my/eldoc-show-help)
+  (let ((buf (eldoc-doc-buffer)))
+    (when (buffer-live-p buf)
+      (setq my/eldoc-focus-window (selected-window)
+            my/eldoc-focus-frame (selected-frame))
+      (when (and (boundp 'eldoc-box--frame)
+                 (frame-live-p eldoc-box--frame)
+                 (frame-visible-p eldoc-box--frame))
+        (eldoc-box-quit-frame))
+      (let ((win (display-buffer
+                  buf
+                  '((display-buffer-reuse-window
+                     display-buffer-below-selected)
+                    (window-height . 0.3)))))
+        (when (window-live-p win)
+          (select-window win)
+          (with-current-buffer buf
+            (setq-local cursor-type t)
+            (use-local-map (copy-keymap (current-local-map)))
+            (local-set-key (kbd "q")
+                           (lambda ()
+                             (interactive)
+                             (quit-window t)
+                             (my/eldoc-restore-focus)))))))))
+
+(defun my/eldoc-show-help-smart ()
+  "Show eldoc; press twice to open a focused doc window."
+  (interactive)
+  (if (eq last-command 'my/eldoc-show-help-smart)
+      (my/eldoc-show-help-window)
+    (my/eldoc-show-help)))
+
+(defun my/eldoc-restore-focus (&rest _)
+  "Restore focus to the last window after eldoc-box hides."
+  (when (frame-live-p my/eldoc-focus-frame)
+    (select-frame-set-input-focus my/eldoc-focus-frame))
+  (when (window-live-p my/eldoc-focus-window)
+    (set-frame-selected-window (window-frame my/eldoc-focus-window) my/eldoc-focus-window)
+    (select-window my/eldoc-focus-window))
+  (setq my/eldoc-focus-window nil
+        my/eldoc-focus-frame nil))
 
 (defun my/elisp-eval-sexp-at-point ()
   "Evaluate the s-expression at point and echo the result."
@@ -259,6 +308,5 @@ INTERACTIVE is ignored; always fetches the buffer silently."
       nil)
      ((my/eglot-server-available-p)
       (eglot-ensure)))))
-
 
 (provide 'core)

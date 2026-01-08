@@ -11,27 +11,38 @@
   :ensure t
   :config
   (setq eldoc-box-frame-parameters
-        '((internal-border-width . 2)
+        '((internal-border-width . 0)
           (left-fringe . 0)
           (right-fringe . 0)
-          (undecorated . t)))
+          (undecorated . t)
+          (minibuffer . nil)))
 
   (defun my/eldoc-box-border-style (_parent-frame)
-    "Style the eldoc-box child frame with a dark pastel border."
+    "Style the eldoc-box child frame without a border."
     (let ((frame (selected-frame)))
       (when (frame-live-p frame)
-        (set-frame-parameter frame 'internal-border-width 6)
-        (set-face-attribute 'eldoc-box-border frame
-                            :background "#2f3e46")
+        (set-frame-parameter frame 'internal-border-width 0)
+        (set-face-attribute 'eldoc-box-border frame :background "unspecified")
         (when (facep 'child-frame-border)
-          (set-face-background 'child-frame-border "#2f3e46" frame))
+          (set-face-background 'child-frame-border "unspecified" frame))
         (set-face-attribute 'eldoc-box-body frame
                             :background "#0f1218"
                             :foreground (face-foreground 'default nil t)
                             :box nil))))
 
   (add-hook 'eldoc-box-frame-hook #'my/eldoc-box-border-style)
-  (eldoc-box-hover-at-point-mode 1))
+  (add-hook 'eldoc-box-buffer-hook
+            (lambda ()
+              (setq-local mode-line-format nil)
+              (setq-local header-line-format nil)
+              (when (boundp 'eldoc-box-buffer-map)
+                (define-key eldoc-box-buffer-map (kbd "q")
+                  (lambda ()
+                    (interactive)
+                    (eldoc-box-quit-frame)
+                    (my/eldoc-restore-focus))))))
+  (when (display-graphic-p)
+    (eldoc-box-hover-at-point-mode 1)))
 
 (defun my/eldoc-box-fontify-markdown (&rest _)
   "Use Markdown/GFM font-lock (including fenced code) in eldoc popovers."

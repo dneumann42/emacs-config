@@ -2,10 +2,14 @@
 
 (add-to-list 'load-path (expand-file-name "lisp" user-emacs-directory))
 
-(require 'core)
-(require 'ui)
-(require 'lang)
-(require 'tools)
-(require 'projects)
-(require 'completion)
-(require 'theme)
+(defun my/load-config (file)
+  "Load a config FILE from the user Emacs directory."
+  (load (expand-file-name file user-emacs-directory) nil 'nomessage))
+
+(my/load-config "lisp/core.el")
+(my/load-config "lisp/ui.el")
+(my/load-config "lisp/lang.el")
+(my/load-config "lisp/tools.el")
+(my/load-config "lisp/projects.el")
+(my/load-config "lisp/completion.el")
+(my/load-config "lisp/theme.el")
