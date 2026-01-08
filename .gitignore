@@ -9,4 +9,5 @@
 /projectile-bookmarks.eld
 /projects.eld
 /tramp
-#*
+#.*
+wallust-theme.el

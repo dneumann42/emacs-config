@@ -7,6 +7,16 @@
 (require 'seq)
 (require 'cl-lib)
 
+;; Disable backup (~), auto-save (#), and lock (.#) files.
+(setq make-backup-files nil
+      auto-save-default nil
+      create-lockfiles nil)
+
+;; Load custom settings from a separate file.
+(setq custom-file (expand-file-name "custom.el" user-emacs-directory))
+(when (file-exists-p custom-file)
+  (load custom-file))
+
 ;; Ensure nimble-installed tools like nimlangserver are on PATH for Emacs.
 (let ((nimble-bin (expand-file-name "~/.nimble/bin")))
   (add-to-list 'exec-path nimble-bin)
@@ -24,19 +34,30 @@
                                    process-environment)))
         (setq-local process-environment (cons path-var existing))))))
 
-;; Make Catppuccin background transparent so the frame inherits the underlying
-;; terminal/compositor background.
-(setq catppuccin-transparent-background t)
-
 (add-to-list 'default-frame-alist '(alpha-background . 90))
 (set-frame-parameter nil 'alpha-background 90)
-(load-theme 'catppuccin :no-confirm)
+(let ((wallust-theme (expand-file-name "wallust-theme.el" user-emacs-directory)))
+  (when (file-exists-p wallust-theme)
+    (load-file wallust-theme)
+    (load-theme 'wallust t)))
 (tool-bar-mode -1)
 (scroll-bar-mode -1)
 (menu-bar-mode -1)
 (line-number-mode 1)
 (global-auto-revert-mode 1)
 (pixel-scroll-precision-mode 1)
+
+;; Dashboard
+(setq inhibit-startup-screen t)
+
+(defun my/dashboard ()
+  (interactive)
+  (let ((buffer-calendar "*Calendar*"))
+    (calendar)
+    (delete-other-windows)
+    (switch-to-buffer (get-buffer buffer-calendar))))
+
+(add-hook 'emacs-startup-hook #'my/dashboard)
 
 (defun my/format-buffer ()
   "Indent the entire buffer using the active major mode."
@@ -199,12 +220,16 @@ INTERACTIVE is ignored; always fetches the buffer silently."
 
 (defun my/eglot-ensure-maybe ()
   "Start Eglot only when a server is configured and available."
-  (if (and (derived-mode-p 'scheme-mode)
-           (not (my/guile-lsp-command)))
-      (when (bound-and-true-p eglot-managed-mode)
-        (eglot-managed-mode -1))
-    (when (my/eglot-server-available-p)
-      (eglot-ensure))))
+  (when (require 'eglot nil t)
+    (cond
+     ((derived-mode-p 'scheme-mode)
+      (when (and (not (my/guile-lsp-command))
+                 (bound-and-true-p eglot-managed-mode))
+        (eglot-managed-mode -1)))
+     ((derived-mode-p 'python-mode 'python-ts-mode)
+      nil)
+     ((my/eglot-server-available-p)
+      (eglot-ensure)))))
 
 (use-package line-reminder
   :ensure t
@@ -287,7 +312,13 @@ INTERACTIVE is ignored; always fetches the buffer silently."
                  . ("vscode-json-language-server" "--stdio")))
   (add-to-list 'eglot-server-programs
                '((yaml-mode yaml-ts-mode)
-                 . ("yaml-language-server" "--stdio"))))
+                 . ("yaml-language-server" "--stdio")))
+  (defun my/rust-analyzer-command ()
+    ;; Prefer system rust-analyzer; keeps args centralized.
+    (or (executable-find "rust-analyzer") "rust-analyzer"))
+  (add-to-list 'eglot-server-programs
+               `((rust-mode rust-ts-mode)
+                 . ,(list (my/rust-analyzer-command)))))
 
 (use-package scheme
   :ensure nil
@@ -323,17 +354,125 @@ INTERACTIVE is ignored; always fetches the buffer silently."
   ((typescript-mode typescript-ts-mode tsx-ts-mode js-mode js-ts-mode)
    . my/typescript-eldoc-box-prettify))
 
+(use-package rust-mode
+  :ensure t
+  :init
+  (setq rust-format-on-save t)
+  :hook
+  ((rust-mode rust-ts-mode) . my/eglot-ensure-maybe))
+
+(use-package org
+  :ensure t
+  :init
+  (setq org-hide-leading-stars t)
+  :config
+  (dolist (face-scale '((org-document-title . 3.0)
+                        (org-level-1 . 2.5)
+                        (org-level-2 . 2.0)
+                        (org-level-3 . 1.5)
+                        (org-level-4 . 1.0)
+                        (org-level-5 . 1.0)
+                        (org-level-6 . 1.0)
+                        (org-level-7 . 1.0)
+                        (org-level-8 . 1.0)))
+    (set-face-attribute (car face-scale) nil :weight 'bold :height (cdr face-scale))))
+
+(use-package org-bullets
+  :ensure t
+  :after org
+  :hook
+  (org-mode . org-bullets-mode))
+
 (defun my/typescript-eldoc-box-prettify ()
   "Prettify TS/JS Eldoc popups by using eldoc-box' TS formatter."
   (when (require 'eldoc-box nil t)
     (add-hook 'eldoc-box-buffer-setup-hook #'eldoc-box-prettify-ts-errors 0 t)))
 
-;; Nim config - use nimlangserver via Eglot.
-(load "nim-mode.el")
-(require 'json)
+;; Python config - prefer uv-managed virtualenvs and local language servers.
+(defun my/python-uv-venv-root ()
+  "Return the root directory of a uv-managed venv when available."
+  (when-let* ((root (locate-dominating-file default-directory ".venv"))
+              (venv (expand-file-name ".venv" root)))
+    (when (file-directory-p venv)
+      venv)))
+
+(defun my/python-add-uv-venv-to-path ()
+  "Add a uv venv's bin directory to PATH/exec-path and set python."
+  (let ((uv-shebang (save-excursion
+                      (goto-char (point-min))
+                      (looking-at
+                       "^#!.*/env -S uv run --quiet\\b"))))
+    (when uv-shebang
+      (setq-local python-shell-interpreter "uv")
+      (setq-local python-shell-interpreter-args "run --quiet"))
+    (when-let* ((venv (my/python-uv-venv-root))
+                (bin (expand-file-name "bin" venv)))
+      (when (file-directory-p bin)
+        (setq-local exec-path (cons bin (seq-remove (lambda (p) (string= p bin)) exec-path)))
+        (let* ((path-var (concat "PATH=" bin path-separator (getenv "PATH")))
+               (existing (seq-remove (lambda (env) (string-prefix-p "PATH=" env))
+                                     process-environment)))
+          (setq-local process-environment (cons path-var existing)))
+        (let ((py (expand-file-name "python" bin)))
+          (when (and (file-executable-p py)
+                     (not uv-shebang))
+            (setq-local python-shell-interpreter py)))))))
+
+(defun my/python-venv-bin-exe (exe)
+  "Return EXE from a uv venv bin dir when available."
+  (when-let* ((venv (my/python-uv-venv-root))
+              (bin (expand-file-name "bin" venv))
+              (path (expand-file-name exe bin)))
+    (when (file-executable-p path)
+      path)))
+
+(defun my/python-eglot-server (&rest _ignored)
+  "Return the Python LSP server command list when available."
+  (cond
+   ((or (my/python-venv-bin-exe "basedpyright-langserver")
+        (executable-find "basedpyright-langserver"))
+    (list (or (my/python-venv-bin-exe "basedpyright-langserver")
+              "basedpyright-langserver")
+          "--stdio"))
+   ((or (my/python-venv-bin-exe "pyright-langserver")
+        (executable-find "pyright-langserver"))
+    (list (or (my/python-venv-bin-exe "pyright-langserver")
+              "pyright-langserver")
+          "--stdio"))
+   ((or (my/python-venv-bin-exe "pylsp")
+        (executable-find "pylsp"))
+    (list (or (my/python-venv-bin-exe "pylsp")
+              "pylsp")))
+   (t nil)))
+
+;; Prefer a local Python LSP when available.
 (with-eval-after-load 'eglot
+  ;; Resolve the Python LSP command at connection time so uv venvs are respected.
   (add-to-list 'eglot-server-programs
-               '((nim-mode nimscript-mode) . ("nimlangserver"))))
+               `((python-mode python-ts-mode) . my/python-eglot-server)))
+
+;; Activate uv venvs for Python buffers.
+(defun my/python-setup-eglot ()
+  "Configure PATH for uv venvs and start Eglot for Python."
+  (my/python-add-uv-venv-to-path)
+  (require 'eglot)
+  (add-to-list 'eglot-server-programs
+               `((python-mode python-ts-mode) . my/python-eglot-server))
+  (when (my/eglot-server-available-p)
+    (eglot-ensure)))
+
+(add-hook 'python-mode-hook #'my/python-setup-eglot)
+(add-hook 'python-ts-mode-hook #'my/python-setup-eglot)
+
+;; Nim config - nimsuggest for docs, nim check for diagnostics.
+(load "nim-mode.el")
+(require 'nim-suggest)
+(let ((nimble-nimsuggest (expand-file-name "~/.nimble/bin/nimsuggest")))
+  (setq nimsuggest-path
+        (or (executable-find "nimsuggest")
+            (when (file-executable-p nimble-nimsuggest) nimble-nimsuggest))))
+(use-package flycheck
+  :ensure t)
 
 (defun my/nim-safe-indent ()
   "Indent Nim safely; fall back instead of throwing SMIE errors."
@@ -360,33 +499,17 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
      (let ((forward-sexp-function nil))
        (forward-sexp arg)))))
 
-(add-hook 'eglot-managed-mode-hook
-          (lambda ()
-            (when (derived-mode-p 'nim-mode 'nimscript-mode)
-              ;; Replace default Eglot Eldoc provider with a Nim-filtered version.
-              (setq-local eldoc-documentation-functions
-                          (cons #'my/nim-eglot-eldoc-filter
-                                (remove #'eglot-eldoc-function eldoc-documentation-functions)))
-              (setq-local eldoc-message-function #'my/nim-eldoc-cleanup-effects)
-              ;; Force inlay hints off for Nim buffers even if globally enabled.
-              (when (boundp 'eglot-inlay-hints-mode)
-                (eglot-inlay-hints-mode -1)))))
-(defun my/nim-setup-eglot ()
-  "Configure Nim LSP to disable all inlay hints and start Eglot."
-  (setq-local eglot-workspace-configuration
-              '(:nim (:inlayHints (:typeHints json-false
-                                       :exceptionHints json-false
-                                       :parameterHints json-false))))
+(defun my/nim-setup-nimsuggest ()
+  "Configure Nim docs via nimsuggest and diagnostics via nim check."
+  (nimsuggest-mode 1)
   ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
   (setq-local indent-line-function #'my/nim-safe-indent)
   ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
   (setq-local forward-sexp-function #'my/nim-safe-forward-sexp)
-  ;; Ensure Eglot inlay hints minor mode stays off in Nim buffers.
-  (when (boundp 'eglot-inlay-hints-mode)
-    (eglot-inlay-hints-mode -1))
-  (eglot-ensure))
-(add-hook 'nim-mode-hook #'my/nim-setup-eglot)
-(add-hook 'nimscript-mode-hook #'my/nim-setup-eglot)
+  (flycheck-mode 1)
+  (setq-local flycheck-checker 'nim))
+(add-hook 'nim-mode-hook #'my/nim-setup-nimsuggest)
+(add-hook 'nimscript-mode-hook #'my/nim-setup-nimsuggest)
 
 (use-package yaml-mode
   :ensure t
@@ -523,18 +646,41 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
            (end (cdr-safe bounds)))
       (unless (and beg end)
         (user-error "No s-expression at point"))
-      (let* ((code (buffer-substring-no-properties beg end))
-             (ret (geiser-eval--send/wait code))
-             (result (if (geiser-eval--retort-error ret)
-                         (geiser-eval--error-str (geiser-eval--retort-error ret))
-                       (geiser-eval--retort-result-str ret nil))))
-        (cond
-         ((fboundp 'eros--eval-overlay)
-          (eros--eval-overlay result end))
-         ((fboundp 'eros-eval-overlay)
-          (eros-eval-overlay result end))
-         (t
-          (message "%s" result))))))
+      (my/guile-eval-region-with-overlay beg end)))
+
+  (defun my/guile-eval-region-with-overlay (beg end)
+    "Evaluate the region and show the result at point."
+    (interactive "r")
+    (my/guile-ensure-repl)
+    (condition-case err
+        (let* ((ret (geiser-eval-region/wait beg end 3))
+               (result
+                (cond
+                 ((not ret) "Geiser: no response (timeout)")
+                 ((geiser-eval--retort-error ret)
+                  (geiser-eval--error-str (geiser-eval--retort-error ret)))
+                 ((geiser-eval--retort-p ret)
+                  (geiser-eval--retort-result-str ret nil))
+                 (t (format "Geiser: unexpected response %S" ret)))))
+          (cond
+           ((fboundp 'eros--eval-overlay)
+            (eros--eval-overlay result end))
+           ((fboundp 'eros-eval-overlay)
+            (eros-eval-overlay result end))
+           (t
+            (message "%s" result))))
+      (error
+       (message "Geiser eval error: %s" (error-message-string err)))))
+
+  (defun my/guile-eval-definition-with-overlay ()
+    "Evaluate the defun at point and show the result at point."
+    (interactive)
+    (my/guile-ensure-repl)
+    (save-excursion
+      (end-of-defun)
+      (let ((end (point)))
+        (beginning-of-defun)
+        (my/guile-eval-region-with-overlay (point) end))))
 
   (defun my/geiser-capf-for-symbol (&optional predicate)
     "Guard Geiser symbol completion until a REPL exists."
@@ -555,17 +701,25 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
 
   (defun my/guile-setup-keys ()
     (setq-local indent-tabs-mode nil)
-    (local-set-key (kbd "M-<return>") #'geiser-eval-definition)
+    (local-set-key (kbd "M-<return>") #'my/guile-eval-definition-with-overlay)
     (local-set-key (kbd "C-c f") #'my/format-buffer)
     (local-set-key (kbd "C-c d") #'my/guile-find-definition)
     (local-set-key (kbd "C-c b") #'xref-pop-marker-stack)
     (local-set-key (kbd "C-c h") #'geiser-doc-symbol)
-    (local-set-key (kbd "C-c e") #'geiser-eval-last-sexp)
+    (local-set-key (kbd "C-c e") #'my/guile-eval-last-sexp-at-point)
     (local-set-key (kbd "C-c C-c") #'my/guile-eval-last-sexp-at-point)
-    (local-set-key (kbd "C-c r") #'geiser-eval-region)
+    (local-set-key (kbd "C-c r") #'my/guile-eval-region-with-overlay)
     (local-set-key (kbd "C-c B") #'geiser-eval-buffer)
     (local-set-key (kbd "C-c z") #'my/guile-repl)
     (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help))
+
+  (defun my/guile-setup-geiser-keys ()
+    "Bind overlay eval keys in `geiser-mode-map' when available."
+    (when (boundp 'geiser-mode-map)
+      (define-key geiser-mode-map (kbd "M-<return>") #'my/guile-eval-definition-with-overlay)
+      (define-key geiser-mode-map (kbd "C-c e") #'my/guile-eval-last-sexp-at-point)
+      (define-key geiser-mode-map (kbd "C-c C-c") #'my/guile-eval-last-sexp-at-point)
+      (define-key geiser-mode-map (kbd "C-c r") #'my/guile-eval-region-with-overlay)))
 
   (defvar-local my/guile--geiser-retry-count 0
     "Retries left for enabling Geiser in the current Scheme buffer.")
@@ -596,7 +750,9 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
               #'my/geiser-capf-for-symbol nil t))
 
   (add-hook 'scheme-mode-hook #'my/guile-scheme-setup -10)
-  (add-hook 'scheme-mode-hook #'my/guile-setup-keys))
+  (add-hook 'scheme-mode-hook #'my/guile-setup-keys)
+  (with-eval-after-load 'geiser-mode
+    (my/guile-setup-geiser-keys)))
 
 (use-package geiser-guile
   :ensure t
@@ -854,8 +1010,10 @@ SYSTEM is prompted as a symbol name without the leading colon."
                          :sort nil
                          :state state)))
         (find-file (expand-file-name file root)))))
-
-  (define-key projectile-mode-map (kbd "C-c p") #'my/consult-projectile-find-file))
+  (define-key projectile-mode-map (kbd "C-c p") #'my/consult-projectile-find-file)
+  (define-key projectile-mode-map (kbd "C-x p p") #'projectile-switch-project)
+  (define-key projectile-mode-map (kbd "C-x p a") #'projectile-add-known-project)
+  (define-key projectile-mode-map (kbd "C-x p t") #'treemacs-add-project-to-workspace))
 
 ;; package management (straight.el or use-package)
 (use-package vertico
@@ -922,15 +1080,27 @@ SYSTEM is prompted as a symbol name without the leading colon."
 (use-package dockerfile-mode
   :ensure
   :config)
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(package-selected-packages nil))
-(custom-set-faces)
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- 
+
+;; Reload theme when wallust-theme.el changes
+(let ((wallust-theme (expand-file-name "wallust-theme.el" user-emacs-directory))
+      (wallust-theme-name 'wallust))
+  (defun my/wallust-force-black-background ()
+    (let ((black "#000000"))
+      (set-face-attribute 'default nil :background black)
+      (set-face-attribute 'fringe nil :background black)
+      (set-face-attribute 'line-number nil :background black)
+      (set-face-attribute 'line-number-current-line nil :background black)
+      (set-face-attribute 'mode-line nil :background black)
+      (set-face-attribute 'mode-line-inactive nil :background black)
+      (set-face-attribute 'header-line nil :background black)))
+  (defun my/wallust-load-theme ()
+    (when (file-exists-p wallust-theme)
+      (load-file wallust-theme)
+      (load-theme wallust-theme-name t)
+      (my/wallust-force-black-background)))
+  (my/wallust-load-theme)
+  (when (fboundp 'file-notify-add-watch)
+    (file-notify-add-watch
+     wallust-theme
+     '(change)
+     (lambda (_event) (my/wallust-load-theme)))))
