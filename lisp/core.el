@@ -9,13 +9,41 @@
 (require 'cl-lib)
 
 ;; Avoid auto-loading TAGS files (ntagger emits ctags format).
-(setq tags-add-tables nil)
+(setq tags-add-tables nil
+      tags-file-name nil
+      tags-table-list nil)
+
+(defun my/ctags-tags-file-p (file)
+  "Return non-nil when FILE looks like a ctags tags file."
+  (when (and (stringp file) (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file nil 0 256)
+      (goto-char (point-min))
+      (re-search-forward "^!_TAG_FILE_FORMAT" nil t))))
+
+(defun my/etags-skip-ctags (orig &rest args)
+  "Skip ctags TAGS files when etags tries to load them."
+  (let* ((arg (car args))
+         (file (cond
+                ((stringp arg) arg)
+                ((and (boundp 'tags-file-name) tags-file-name))
+                ((and (boundp 'tags-table-list) (car tags-table-list))))))
+    (if (my/ctags-tags-file-p file)
+        nil
+      (apply orig args))))
+
+(with-eval-after-load 'etags
+  (advice-add 'visit-tags-table-buffer :around #'my/etags-skip-ctags))
 
 
 ;; Disable backup (~), auto-save (#), and lock (.#) files.
 (setq make-backup-files nil
       auto-save-default nil
       create-lockfiles nil)
+
+;; Silence the audible bell; use a visual bell instead.
+(setq ring-bell-function 'ignore
+      visible-bell t)
 
 ;; Load custom settings from a separate file.
 (setq custom-file (expand-file-name "custom.el" user-emacs-directory))

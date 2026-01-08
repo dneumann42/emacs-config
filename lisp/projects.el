@@ -109,6 +109,17 @@
   :ensure t
   :config
   (projectile-mode 1)
+  (defun my/projectile-visit-tags-maybe (orig &rest args)
+    "Skip visiting TAGS when missing or in ctags format."
+    (let* ((root (ignore-errors (projectile-project-root)))
+           (tags (and root (expand-file-name projectile-tags-file-name root))))
+      (if (and tags
+               (file-readable-p tags)
+               (not (and (fboundp 'my/ctags-tags-file-p)
+                         (my/ctags-tags-file-p tags))))
+          (apply orig args)
+        nil)))
+  (advice-add 'projectile-visit-project-tags-table :around #'my/projectile-visit-tags-maybe)
   (defun my/consult-projectile-find-file ()
     "Find a project file with Consult, showing an initial list and preview."
     (interactive)

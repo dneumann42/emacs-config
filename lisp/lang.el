@@ -196,18 +196,44 @@
 
 ;; Nim config - nimsuggest for docs, nim check for diagnostics.
 
+(use-package epc
+  :ensure t)
+
+(use-package deferred
+  :ensure t)
+
 (use-package nim-mode
   :ensure nil
   :mode (("\\.nim\\'" . nim-mode)
          ("\\.nimble\\'" . nim-mode))
   :init
+  (setq tags-add-tables nil)
+  (setq tags-file-name nil)
+  (setq tags-table-list nil)
   (require 'nim-mode nil t))
 
+(defvar nimsuggest-options nil)
+(defvar nimsuggest-local-options nil)
+(defvar nimsuggest-accept-process-delay 0.1)
+(defvar nimsuggest-accept-process-timeout-count 300)
+(defvar nimsuggest-dirty-directory
+  (expand-file-name "nimsuggest/" temporary-file-directory)
+  "Directory for nimsuggest temp files.")
+
 (with-eval-after-load 'nim-mode
+  (require 'deferred nil t)
   (condition-case err
       (require 'nim-suggest)
     (error
      (message "Nim suggest skipped: %s" (error-message-string err))))
+  (with-eval-after-load 'nim-suggest
+    (setq nimsuggest-accept-process-delay 0.2
+          nimsuggest-accept-process-timeout-count 1200)
+    (defun my/nimsuggest-start-with-pipe (orig &rest args)
+      "Start nimsuggest using a pipe instead of a PTY."
+      (let ((process-connection-type nil))
+        (apply orig args)))
+    (advice-add 'nimsuggest--start-server-deferred :around #'my/nimsuggest-start-with-pipe))
   (let ((nimble-nimsuggest (expand-file-name "~/.nimble/bin/nimsuggest")))
     (setq nimsuggest-path
           (or (executable-find "nimsuggest")
@@ -244,6 +270,10 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   "Configure Nim docs via nimsuggest and diagnostics via nim check."
   (when (fboundp 'nimsuggest-mode)
     (nimsuggest-mode 1))
+  (when (fboundp 'nimsuggest-eldoc--nimsuggest)
+    (setq-local eldoc-documentation-function #'nimsuggest-eldoc--nimsuggest))
+  (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help)
+  (setq-local tags-file-name nil)
   ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
   (setq-local indent-line-function #'my/nim-safe-indent)
   ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
@@ -450,6 +480,7 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   (defun my/nim-xref-setup ()
     "Prefer ntagger tags in Nim buffers."
     (setq-local tags-add-tables nil)
+    (setq-local tags-file-name nil)
     (setq-local xref-backend-functions '(my/nim-xref-backend))
     (setq-local tags-table-list nil))
   (add-hook 'nim-mode-hook #'my/nim-xref-setup)

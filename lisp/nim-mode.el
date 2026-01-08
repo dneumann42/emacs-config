@@ -2,6 +2,37 @@
 
 ;; Minimal Nim mode to avoid dependency issues.
 
+(defvar nim--log-buffer "*nim-log*")
+;; Minimal stubs required by nim-suggest.
+(defvar-local nim--inside-compiler-dir-p nil)
+(defvar nim-eldoc--skip-regex "\\s-+")
+(defvar nimsuggest-options nil)
+(defvar nimsuggest-local-options nil)
+
+(defun nim-current-symbol ()
+  "Return the Nim symbol at point."
+  (thing-at-point 'symbol t))
+
+(defun nim-eldoc-inside-paren-p ()
+  "Return non-nil if point is inside parentheses."
+  (let ((open (nth 1 (syntax-ppss))))
+    (and open
+         (eq (char-after open) ?\())))
+
+(defun nim-eldoc--try-p ()
+  "Return non-nil when Eldoc should update."
+  t)
+
+(defun nim-eldoc-off ()
+  "No-op stub for nim-suggest compatibility."
+  nil)
+
+(defun nim-log (fmt &rest args)
+  "Log Nim-mode related messages without requiring full nim-mode."
+  (with-current-buffer (get-buffer-create nim--log-buffer)
+    (goto-char (point-max))
+    (insert (apply #'format fmt args) "\n")))
+
 (defgroup nim nil
   "Basic Nim mode."
   :group 'languages)
@@ -64,6 +95,9 @@
   (setq-local font-lock-defaults '(nim-font-lock-keywords))
   (setq-local comment-start "#")
   (setq-local comment-end "")
+  (setq-local tags-add-tables nil)
+  (setq-local tags-file-name nil)
+  (setq-local tags-table-list nil)
   (setq-local indent-tabs-mode nil)
   (setq-local tab-width 2)
   (setq-local standard-indent 2)
