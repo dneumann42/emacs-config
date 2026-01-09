@@ -12,3 +12,5 @@
 #.*
 wallust-theme.el
 /debug-logs/
+/*.elc
+/projects

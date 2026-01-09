@@ -1,6 +1,5 @@
 ;;; core.el --- Core settings -*- lexical-binding: t -*-
 
-
 (require 'package)
 (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
 (package-initialize)
@@ -238,6 +237,7 @@
 (global-set-key (kbd "C-c |") #'my/toggle-window-split)
 (global-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart)
 (global-set-key (kbd "C-x /") #'my/consult-ripgrep-project)
+(global-set-key (kbd "C-x f") #'my/consult-projectile-find-file)
 
 (defun my/consult-ripgrep-project ()
   "Live grep the current projectile/project root with Consult + ripgrep."
