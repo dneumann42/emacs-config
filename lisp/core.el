@@ -83,23 +83,23 @@
 (defvar-local my/dashboard-projects nil)
 
 (defface my/dashboard-title-face
-  '((t :weight bold :height 1.3))
+  '((t :weight bold :height 1.3 :foreground "#f1f5fb"))
   "Face for the dashboard title.")
 
 (defface my/dashboard-section-face
-  '((t :weight bold :foreground "#6fa8dc"))
+  '((t :weight bold :foreground "#7fd6ff"))
   "Face for dashboard section headers.")
 
 (defface my/dashboard-help-face
-  '((t :foreground "#93c47d"))
+  '((t :foreground "#95e6cb"))
   "Face for dashboard help text.")
 
 (defface my/dashboard-project-face
-  '((t :foreground "#ffd966"))
+  '((t :foreground "#ffd580"))
   "Face for dashboard project entries.")
 
 (defface my/dashboard-muted-face
-  '((t :foreground "#999999"))
+  '((t :foreground "#9aa3af"))
   "Face for muted dashboard text.")
 
 (defface my/dashboard-default-face
@@ -107,12 +107,20 @@
   "Face for the dashboard buffer.")
 
 (defface my/dashboard-card-face
-  '((t :background "#1a212b" :foreground "#d8dde5"))
+  '((t :background "#1b2432"))
   "Face for dashboard cards.")
 
 (defface my/dashboard-card-shadow-face
-  '((t :background "#2f3845" :foreground "#2f3845"))
+  '((t :background "#2a3442" :foreground "#2a3442"))
   "Face for dashboard card shadows.")
+
+(defface my/dashboard-calendar-header-face
+  '((t :foreground "#7fd6ff" :weight bold))
+  "Face for the calendar header.")
+
+(defface my/dashboard-calendar-today-face
+  '((t :foreground "#ffd580" :weight bold))
+  "Face for today's date in the calendar.")
 
 (defun my/dashboard-open-project-1 () (interactive) (my/dashboard-open-project-index 1))
 (defun my/dashboard-open-project-2 () (interactive) (my/dashboard-open-project-index 2))
@@ -173,6 +181,18 @@
          (year (nth 2 date)))
     (with-temp-buffer
       (calendar-generate-month month year 1)
+      (goto-char (point-min))
+      (add-face-text-property (line-beginning-position) (line-end-position)
+                              'my/dashboard-calendar-header-face)
+      (forward-line 1)
+      (add-face-text-property (line-beginning-position) (line-end-position)
+                              'my/dashboard-calendar-header-face)
+      (goto-char (point-min))
+      (when (re-search-forward
+             (format "\\(?:^\\|\\s-\\)\\(%2d\\)\\(?:\\s-\\|$\\)" (nth 1 date))
+             nil t)
+        (add-face-text-property (match-beginning 1) (match-end 1)
+                                'my/dashboard-calendar-today-face))
       (buffer-string))))
 
 (defun my/dashboard--insert-agenda ()
@@ -185,7 +205,7 @@
       (org-agenda-list 1)
       (when-let ((buf (get-buffer "*Org Agenda*")))
         (with-current-buffer buf
-          (buffer-substring-no-properties (point-min) (point-max)))))))
+          (buffer-string))))))
 
 (defun my/dashboard--section-width ()
   "Return a usable width for centered sections."
@@ -224,18 +244,19 @@
             (propertize " " 'face 'my/dashboard-card-face)
             (propertize " " 'face 'my/dashboard-default-face)
             "\n")
+    (add-face-text-property 0 (length title-line) 'my/dashboard-card-face 'append title-line)
     (insert left
             (propertize " " 'face 'my/dashboard-card-face)
-            (propertize (my/dashboard--center-line title-line inner)
-                        'face 'my/dashboard-card-face)
+            (my/dashboard--center-line title-line inner)
             (propertize " " 'face 'my/dashboard-card-face)
             (propertize " " 'face 'my/dashboard-card-face)
             (propertize " " 'face 'my/dashboard-card-shadow-face)
             "\n")
     (dolist (line lines)
+      (add-face-text-property 0 (length line) 'my/dashboard-card-face 'append line)
       (insert left
               (propertize " " 'face 'my/dashboard-card-face)
-              (propertize line 'face 'my/dashboard-card-face)
+              line
               (propertize " " 'face 'my/dashboard-card-face)
               (propertize " " 'face 'my/dashboard-card-face)
               (propertize " " 'face 'my/dashboard-card-shadow-face)
@@ -270,8 +291,16 @@
       (setq my/dashboard-projects (my/dashboard-projects))
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (propertize "An editor for wizards" 'face 'my/dashboard-title-face)
-                "\n\n")
+        (let* ((title "An editor for wizards")
+               (win (get-buffer-window buf))
+               (win-width (or (and win (window-body-width win)) (frame-width)))
+               (section-width (my/dashboard--section-width))
+               (left (make-string (max 0 (/ (- win-width section-width) 2)) ?\s)))
+          (insert "\n"
+                  left
+                  (propertize (my/dashboard--center-line title section-width)
+                              'face 'my/dashboard-title-face)
+                  "\n\n"))
         (my/dashboard--insert-card
          (propertize "Calendar" 'face 'my/dashboard-section-face)
          (my/dashboard--calendar-string))
