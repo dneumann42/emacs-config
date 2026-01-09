@@ -79,12 +79,148 @@
 ;; Dashboard
 (setq inhibit-startup-screen t)
 
-(defun my/dashboard ()
+(defvar my/dashboard-buffer-name "*Dashboard*")
+
+(defvar-local my/dashboard-projects nil)
+
+(defface my/dashboard-title-face
+  '((t :weight bold :height 1.3))
+  "Face for the dashboard title.")
+
+(defface my/dashboard-section-face
+  '((t :weight bold :foreground "#6fa8dc"))
+  "Face for dashboard section headers.")
+
+(defface my/dashboard-help-face
+  '((t :foreground "#93c47d"))
+  "Face for dashboard help text.")
+
+(defface my/dashboard-project-face
+  '((t :foreground "#ffd966"))
+  "Face for dashboard project entries.")
+
+(defface my/dashboard-muted-face
+  '((t :foreground "#999999"))
+  "Face for muted dashboard text.")
+
+(defun my/dashboard-open-project-1 () (interactive) (my/dashboard-open-project-index 1))
+(defun my/dashboard-open-project-2 () (interactive) (my/dashboard-open-project-index 2))
+(defun my/dashboard-open-project-3 () (interactive) (my/dashboard-open-project-index 3))
+(defun my/dashboard-open-project-4 () (interactive) (my/dashboard-open-project-index 4))
+(defun my/dashboard-open-project-5 () (interactive) (my/dashboard-open-project-index 5))
+(defun my/dashboard-open-project-6 () (interactive) (my/dashboard-open-project-index 6))
+(defun my/dashboard-open-project-7 () (interactive) (my/dashboard-open-project-index 7))
+(defun my/dashboard-open-project-8 () (interactive) (my/dashboard-open-project-index 8))
+(defun my/dashboard-open-project-9 () (interactive) (my/dashboard-open-project-index 9))
+
+(defvar my/dashboard-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'my/dashboard-refresh)
+    (define-key map (kbd "1") #'my/dashboard-open-project-1)
+    (define-key map (kbd "2") #'my/dashboard-open-project-2)
+    (define-key map (kbd "3") #'my/dashboard-open-project-3)
+    (define-key map (kbd "4") #'my/dashboard-open-project-4)
+    (define-key map (kbd "5") #'my/dashboard-open-project-5)
+    (define-key map (kbd "6") #'my/dashboard-open-project-6)
+    (define-key map (kbd "7") #'my/dashboard-open-project-7)
+    (define-key map (kbd "8") #'my/dashboard-open-project-8)
+    (define-key map (kbd "9") #'my/dashboard-open-project-9)
+    map)
+  "Keymap for `my/dashboard-mode'.")
+
+(define-derived-mode my/dashboard-mode special-mode "Dashboard"
+  "Major mode for the Emacs start screen.")
+(set-keymap-parent my/dashboard-mode-map special-mode-map)
+
+(defun my/dashboard-projects ()
+  "Return a list of recent project roots."
+  (cond
+   ((fboundp 'projectile-load-known-projects)
+    (projectile-load-known-projects)
+    (or (and (boundp 'projectile-known-projects)
+             projectile-known-projects)
+        (and (fboundp 'projectile-relevant-known-projects)
+             (projectile-relevant-known-projects))))
+   ((fboundp 'project-known-project-roots)
+    (project-known-project-roots))
+   (t nil)))
+
+(defun my/dashboard-open-project-index (index)
+  "Open the project at INDEX in the dashboard list."
   (interactive)
-  (let ((buffer-calendar "*Calendar*"))
-    (calendar)
-    (delete-other-windows)
-    (switch-to-buffer (get-buffer buffer-calendar))))
+  (let ((project (nth (1- index) my/dashboard-projects)))
+    (unless project
+      (user-error "No project at %d" index))
+    (if (fboundp 'projectile-switch-project-by-name)
+        (projectile-switch-project-by-name project)
+      (dired project))))
+
+(defun my/dashboard--calendar-string ()
+  "Return a string for the current month calendar."
+  (let* ((date (calendar-current-date))
+         (month (nth 0 date))
+         (year (nth 2 date)))
+    (with-temp-buffer
+      (calendar-generate-month month year 1)
+      (buffer-string))))
+
+(defun my/dashboard--insert-agenda ()
+  "Insert today's agenda into the dashboard buffer."
+  (save-window-excursion
+    (require 'org-agenda)
+    (let ((org-agenda-span 1)
+          (org-agenda-start-on-weekday nil)
+          (org-agenda-window-setup 'current-window))
+      (org-agenda-list 1)
+      (when-let ((buf (get-buffer "*Org Agenda*")))
+        (with-current-buffer buf
+          (buffer-substring-no-properties (point-min) (point-max)))))))
+
+(defun my/dashboard-refresh ()
+  "Refresh the dashboard contents."
+  (interactive)
+  (let ((buf (get-buffer-create my/dashboard-buffer-name)))
+    (with-current-buffer buf
+      (my/dashboard-mode)
+      (use-local-map my/dashboard-mode-map)
+      (setq-local overriding-local-map my/dashboard-mode-map)
+      (setq my/dashboard-projects (my/dashboard-projects))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "Start" 'face 'my/dashboard-title-face) "\n\n")
+        (insert (propertize "Calendar" 'face 'my/dashboard-section-face) "\n")
+        (insert (propertize "────────" 'face 'my/dashboard-muted-face) "\n")
+        (insert (my/dashboard--calendar-string))
+        (insert "\n")
+        (insert "\n" (propertize "Agenda" 'face 'my/dashboard-section-face) "\n")
+        (insert (propertize "──────" 'face 'my/dashboard-muted-face) "\n")
+        (let ((agenda (my/dashboard--insert-agenda)))
+          (if (and agenda (stringp agenda))
+              (insert agenda)
+            (insert "No agenda items.\n")))
+        (insert "\n" (propertize "Recent Projects" 'face 'my/dashboard-section-face) "\n")
+        (insert (propertize "──────────────" 'face 'my/dashboard-muted-face) "\n")
+        (insert (propertize "Keys: 1-9 open project, g refresh"
+                            'face 'my/dashboard-help-face)
+                "\n\n")
+        (if my/dashboard-projects
+            (cl-loop for proj in (seq-take my/dashboard-projects 9)
+                     for idx from 1 do
+                     (insert (propertize (format "%d. %s\n" idx proj)
+                                         'face 'my/dashboard-project-face)))
+          (insert (propertize "No projects found.\n"
+                              'face 'my/dashboard-muted-face)))))))
+
+(defun my/dashboard-setup-windows ()
+  "Show the start screen in a single window."
+  (delete-other-windows)
+  (my/dashboard-refresh)
+  (switch-to-buffer my/dashboard-buffer-name))
+
+(defun my/dashboard ()
+  "Open the start screen."
+  (interactive)
+  (my/dashboard-setup-windows))
 
 (add-hook 'emacs-startup-hook #'my/dashboard)
 
