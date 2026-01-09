@@ -43,18 +43,23 @@
   :group 'languages)
 
 (defface nim-paren-face
-  '((t :inherit font-lock-delimiter-face))
+  '((t (:foreground "#ffa500")))
   "Face used for Nim parentheses."
   :group 'nim)
 
 (defface nim-bracket-face
-  '((t :inherit font-lock-delimiter-face))
+  '((t (:foreground "#66d9ef")))
   "Face used for Nim brackets."
   :group 'nim)
 
 (defface nim-brace-face
-  '((t :inherit font-lock-delimiter-face))
+  '((t (:foreground "#c678dd")))
   "Face used for Nim braces."
+  :group 'nim)
+
+(defface nim-function-call-face
+  '((t :inherit font-lock-function-name-face))
+  "Face used for Nim calls when `font-lock-function-call-face' is unavailable."
   :group 'nim)
 
 (defconst nim--keywords
@@ -111,7 +116,7 @@
 (defconst nim--function-call-face
   (if (facep 'font-lock-function-call-face)
       'font-lock-function-call-face
-    'font-lock-function-name-face)
+    'nim-function-call-face)
   "Face to use for Nim function calls.")
 
 (defun nim--match-function-call (limit)
