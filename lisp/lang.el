@@ -241,6 +241,75 @@
 (use-package flycheck
   :ensure t)
 
+(defvar-local my/nim-flymake--process nil)
+(defconst my/nim-flymake--diagnostic-regexp
+  "^\\(.*\\)(\\([0-9]+\\), \\([0-9]+\\)) \\(Error\\|Warning\\|Hint\\): \\(.*\\)$")
+
+(defun my/nim-flymake--severity (kind)
+  "Map Nim diagnostic KIND to Flymake severity."
+  (pcase kind
+    ("Error" :error)
+    ("Warning" :warning)
+    (_ :note)))
+
+(defun my/nim-flymake-backend (report-fn &rest _args)
+  "Run `nim check` and report diagnostics for the current buffer."
+  (when (process-live-p my/nim-flymake--process)
+    (kill-process my/nim-flymake--process))
+  (let ((source (buffer-file-name)))
+    (if (or (not source) (not (executable-find "nim")))
+        (funcall report-fn nil)
+      (let* ((buf (current-buffer))
+             (default-directory (file-name-directory source))
+             (output (generate-new-buffer " *nim-check*"))
+             (cmd (list "nim" "check" "--listFullPaths" "--hints:on"
+                        "--warnings:on" source)))
+        (setq my/nim-flymake--process
+              (make-process
+               :name "nim-flymake"
+               :buffer output
+               :stderr output
+               :command cmd
+               :noquery t
+               :sentinel
+               (lambda (proc _event)
+                 (when (and (memq (process-status proc) '(exit signal))
+                            (eq proc my/nim-flymake--process))
+                   (unwind-protect
+                       (when (buffer-live-p buf)
+                         (with-current-buffer buf
+                           (let (diags)
+                             (when (buffer-live-p output)
+                               (with-current-buffer output
+                                 (goto-char (point-min))
+                                 (while (re-search-forward my/nim-flymake--diagnostic-regexp nil t)
+                                   (let* ((file (match-string 1))
+                                          (line (string-to-number (match-string 2)))
+                                          (col (string-to-number (match-string 3)))
+                                          (kind (match-string 4))
+                                          (msg (match-string 5))
+                                          (abs (expand-file-name file)))
+                                     (when (file-equal-p abs source)
+                                       (let* ((region (flymake-diag-region buf line (max 1 col)))
+                                              (beg (car region))
+                                              (end (cdr region))
+                                              (severity (my/nim-flymake--severity kind)))
+                                         (push (flymake-make-diagnostic buf beg end severity msg)
+                                               diags)))))))
+                             (funcall report-fn diags))))
+                     (when (buffer-live-p output)
+                       (kill-buffer output)))
+                   (setq my/nim-flymake--process nil)))))))))
+
+(defun my/nim-flymake-setup ()
+  "Enable `nim check` diagnostics for the current buffer."
+  (require 'flymake)
+  (setq-local flymake-no-changes-timeout nil)
+  (add-hook 'flymake-diagnostic-functions #'my/nim-flymake-backend nil t)
+  (flymake-mode 1)
+  (flymake-start)
+  (add-hook 'after-save-hook #'flymake-start nil t))
+
 (defun my/nim-safe-indent ()
   "Indent Nim safely; fall back instead of throwing SMIE errors."
   (interactive)
@@ -255,16 +324,198 @@
 ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   (interactive "p")
   (condition-case err
-      ;; Bind `forward-sexp-function' to nil so any nested `forward-sexp' calls
-      ;; use the built-in implementation and avoid recursive loops.
+      ;; Bind `forward-sexp-function' to nil so nested calls use built-in behavior.
       (let ((forward-sexp-function nil))
-        (if (fboundp 'smie-forward-sexp)
-            (smie-forward-sexp arg)
-          (forward-sexp arg)))
+        (forward-sexp arg))
     (error
-     (message "Nim sexp fallback: %s" (error-message-string err))
-     (let ((forward-sexp-function nil))
-       (forward-sexp arg)))))
+     (message "Nim sexp fallback: %s" (error-message-string err))))) 
+
+(defun my/nim--diagnostic-at-point ()
+  "Return the first Flymake diagnostic on the current line."
+  (when (and (bound-and-true-p flymake-mode)
+             (fboundp 'flymake-diagnostics))
+    (car (flymake-diagnostics (line-beginning-position)
+                              (line-end-position)))))
+
+(defun my/nim--format-diagnostic (diag)
+  "Format DIAG as a readable string."
+  (let* ((kind (flymake-diagnostic-type diag))
+         (label (pcase kind
+                  ('error "Error")
+                  ('warning "Warning")
+                  (_ "Hint"))))
+    (format "%s: %s" label (flymake-diagnostic-text diag))))
+
+(defface my/nim-diagnostic-label-error
+  '((t :inherit error :weight bold))
+  "Face for Nim error labels.")
+
+(defface my/nim-diagnostic-label-warning
+  '((t :inherit warning :weight bold))
+  "Face for Nim warning labels.")
+
+(defface my/nim-diagnostic-label-hint
+  '((t :inherit shadow :weight bold))
+  "Face for Nim hint labels.")
+
+(defface my/nim-diagnostic-message
+  '((t :inherit default))
+  "Face for Nim diagnostic messages.")
+
+(defun my/nim--diagnostic-buffer (diag)
+  "Populate and return a buffer that displays DIAG."
+  (let ((buf (get-buffer-create "*nim-diagnostics*")))
+    (with-current-buffer buf
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (let* ((kind (flymake-diagnostic-type diag))
+             (label-face (pcase kind
+                           ('error 'my/nim-diagnostic-label-error)
+                           ('warning 'my/nim-diagnostic-label-warning)
+                           (_ 'my/nim-diagnostic-label-hint)))
+             (label (pcase kind
+                      ('error "Error")
+                      ('warning "Warning")
+                      (_ "Hint")))
+             (msg (flymake-diagnostic-text diag)))
+        (insert (propertize (concat label ": ") 'face label-face))
+        (insert (propertize msg 'face 'my/nim-diagnostic-message)))
+      (special-mode)
+      (setq mode-line-format nil)
+      (setq-local header-line-format nil)
+      (setq-local tab-line-format nil)
+      (setq-local truncate-lines t)
+      (setq-local display-line-numbers nil)
+      (setq buffer-read-only t))
+    buf))
+
+(defvar my/nim--diagnostic-child-frame nil)
+(defvar my/nim--diagnostic-source-buffer nil)
+(defvar my/nim--diagnostic-source-line nil)
+
+(defun my/nim--diagnostic-max-lines ()
+  "Return the maximum lines for the diagnostic popup."
+  3)
+
+(defun my/nim--diagnostic-child-params ()
+  "Return child frame parameters near point for diagnostics."
+  (when (display-graphic-p)
+    (let* ((pos (posn-at-point))
+           (xy (and pos (posn-x-y pos)))
+           (edges (window-pixel-edges))
+           (left (nth 0 edges))
+           (top (nth 1 edges))
+           (x (and (numberp left) (consp xy) (numberp (car xy))
+                   (+ left (car xy))))
+           (y (and (numberp top) (consp xy) (numberp (cdr xy))
+                   (+ top (cdr xy) (frame-char-height)))))
+      (when (and (numberp x) (numberp y))
+        `((parent-frame . ,(selected-frame))
+          (left . ,x)
+          (top . ,y)
+          (minibuffer . nil)
+          (no-accept-focus . t)
+          (border-width . 0)
+          (internal-border-width . 0)
+          (vertical-scroll-bars . nil)
+          (horizontal-scroll-bars . nil)
+          (undecorated . t)
+          (no-other-frame . t)
+          (width . 80)
+          (height . ,(my/nim--diagnostic-max-lines))
+          (cursor-type . nil))))))
+
+(defun my/nim--hide-diagnostic-child-frame ()
+  "Hide the diagnostic child frame when present."
+  (when (frame-live-p my/nim--diagnostic-child-frame)
+    (delete-frame my/nim--diagnostic-child-frame))
+  (setq my/nim--diagnostic-child-frame nil))
+
+(defun my/nim--diagnostic-still-valid-p ()
+  "Return non-nil if point is still on the source diagnostic line."
+  (and (buffer-live-p my/nim--diagnostic-source-buffer)
+       (eq (current-buffer) my/nim--diagnostic-source-buffer)
+       (numberp my/nim--diagnostic-source-line)
+       (= (line-number-at-pos) my/nim--diagnostic-source-line)))
+
+(defun my/nim--maybe-hide-diagnostic-on-move ()
+  "Hide the diagnostic popup when point moves off the source line."
+  (unless (my/nim--diagnostic-still-valid-p)
+    (remove-hook 'post-command-hook #'my/nim--maybe-hide-diagnostic-on-move)
+    (setq my/nim--diagnostic-source-buffer nil
+          my/nim--diagnostic-source-line nil)
+    (my/nim--hide-diagnostic-child-frame)))
+
+
+
+(defun my/nim--show-diagnostic (diag)
+  "Display DIAG in a floating child frame near point."
+  (require 'eldoc-box)
+  (let* ((buf (my/nim--diagnostic-buffer diag))
+         (child-params (append eldoc-box-frame-parameters
+                               (my/nim--diagnostic-child-params)))
+         (win (display-buffer-in-child-frame
+               buf
+               `((child-frame-parameters . ,child-params)
+                 (window-parameters . ((no-other-window . t)
+                                       (no-delete-other-windows . t)))))))
+    (my/nim--hide-diagnostic-child-frame)
+    (when (window-live-p win)
+      (setq my/eldoc-focus-window (selected-window)
+            my/eldoc-focus-frame (selected-frame)
+            my/nim--diagnostic-child-frame (window-frame win)
+            my/nim--diagnostic-source-buffer (current-buffer)
+            my/nim--diagnostic-source-line (line-number-at-pos))
+      (with-selected-window win
+        (set-window-parameter win 'mode-line-format nil)
+        (set-window-parameter win 'header-line-format nil)
+        (set-window-margins win 0 0)
+        (with-current-buffer buf
+          (use-local-map (copy-keymap (current-local-map)))
+          (local-set-key
+           (kbd "q")
+           (lambda ()
+             (interactive)
+             (remove-hook 'post-command-hook #'my/nim--maybe-hide-diagnostic-on-move)
+             (setq my/nim--diagnostic-source-buffer nil
+                   my/nim--diagnostic-source-line nil)
+             (my/nim--hide-diagnostic-child-frame)
+             (my/eldoc-restore-focus)))))))
+    (add-hook 'post-command-hook #'my/nim--maybe-hide-diagnostic-on-move))
+
+
+(defun my/nim--show-diagnostic-window (diag)
+  "Display DIAG in a focused window."
+  (my/nim--hide-diagnostic-child-frame)
+  (let ((buf (my/nim--diagnostic-buffer diag)))
+    (setq my/eldoc-focus-window (selected-window)
+          my/eldoc-focus-frame (selected-frame))
+    (let ((win (display-buffer
+                buf
+                '((display-buffer-reuse-window display-buffer-below-selected)
+                  (window-height . 0.3)))))
+      (when (window-live-p win)
+        (select-window win)
+        (with-current-buffer buf
+          (use-local-map (copy-keymap (current-local-map)))
+          (local-set-key
+           (kbd "q")
+           (lambda ()
+             (interactive)
+             (quit-window t)
+             (my/eldoc-restore-focus))))))))
+
+(defun my/nim-show-doc-or-diagnostic ()
+  "Show Nim diagnostics at point, otherwise show docs."
+  (interactive)
+  (let ((diag (my/nim--diagnostic-at-point)))
+    (if diag
+        (if (eq last-command 'my/nim-show-doc-or-diagnostic)
+            (my/nim--show-diagnostic-window diag)
+          (my/nim--show-diagnostic diag))
+      (if (eq last-command 'my/nim-show-doc-or-diagnostic)
+          (my/eldoc-show-help-window)
+        (my/eldoc-show-help)))))
 
 (defun my/nim-setup-nimsuggest ()
   "Configure Nim docs via nimsuggest and diagnostics via nim check."
@@ -274,14 +525,15 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
     (setq-local eldoc-documentation-function
                 (lambda (&rest _args)
                   (nimsuggest-eldoc--nimsuggest))))
-  (local-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart)
+  (local-set-key (kbd "C-M-<return>") #'my/nim-show-doc-or-diagnostic)
   (setq-local tags-file-name nil)
   ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
   (setq-local indent-line-function #'my/nim-safe-indent)
   ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
   (setq-local forward-sexp-function #'my/nim-safe-forward-sexp)
-  (flycheck-mode 1)
-  (setq-local flycheck-checker 'nim))
+  (when (fboundp 'flycheck-mode)
+    (flycheck-mode -1))
+  (my/nim-flymake-setup))
 (add-hook 'nim-mode-hook #'my/nim-setup-nimsuggest)
 (add-hook 'nimscript-mode-hook #'my/nim-setup-nimsuggest)
 
