@@ -99,6 +99,7 @@
 
 (global-set-key (kbd "C-c t n") #'tab-line-switch-to-next-tab)
 (global-set-key (kbd "C-c t p") #'tab-line-switch-to-prev-tab)
+(global-set-key (kbd "C-c |") #'my/toggle-window-split)
 (global-set-key (kbd "C-M-<return>") #'my/eldoc-show-help-smart)
 (global-set-key (kbd "C-x /") #'my/consult-ripgrep-project)
 
@@ -111,6 +112,169 @@
                    (car (project-roots proj)))
                  default-directory)))
     (consult-ripgrep dir)))
+
+(defun my/window-state-toggle-split (state)
+  "Return window STATE with split directions toggled."
+  (cond
+   ((eq state 'vc) 'hc)
+   ((eq state 'hc) 'vc)
+   ((consp state)
+    (if (and (fboundp 'proper-list-p) (proper-list-p state))
+        (mapcar #'my/window-state-toggle-split state)
+      (cons (my/window-state-toggle-split (car state))
+            (my/window-state-toggle-split (cdr state)))))
+   (t state)))
+
+(defun my/window-main-root ()
+  "Return the root window of the main area, excluding side windows."
+  (let ((root (frame-root-window)))
+    (if-let ((child (window-child root)))
+        (let ((node child)
+              found)
+          (while node
+            (if (window-parameter node 'window-side)
+                (setq node (window-next-sibling node))
+              (setq found node
+                    node nil)))
+          (or found (window-main-window)))
+      (window-main-window))))
+
+(defun my/side-window-list ()
+  "Return a list of live side windows on the current frame."
+  (seq-filter (lambda (win)
+                (window-parameter win 'window-side))
+              (window-list nil 'no-minibuf)))
+
+(defun my/main-window-list ()
+  "Return a list of non-side windows on the current frame."
+  (seq-filter (lambda (win)
+                (and (not (window-parameter win 'window-side))
+                     (with-current-buffer (window-buffer win)
+                       (not (derived-mode-p 'treemacs-mode)))))
+              (window-list nil 'no-minibuf)))
+
+(defun my/side-window-snapshots ()
+  "Capture buffers and geometry for current side windows."
+  (let ((snaps
+         (mapcar (lambda (win)
+                   (list :buffer (window-buffer win)
+                         :side (window-parameter win 'window-side)
+                         :slot (window-parameter win 'window-slot)
+                         :width (window-total-width win)
+                         :height (window-total-height win)
+                         :dedicated (window-dedicated-p win)))
+                 (my/side-window-list))))
+    (when-let* ((treemacs-win (when (fboundp 'treemacs-get-local-window)
+                                (treemacs-get-local-window)))
+                (buf (and (window-live-p treemacs-win)
+                          (window-buffer treemacs-win))))
+      (push (list :buffer buf
+                  :side 'left
+                  :slot 0
+                  :width (window-total-width treemacs-win)
+                  :height (window-total-height treemacs-win)
+                  :dedicated (window-dedicated-p treemacs-win)
+                  :force-side t)
+            snaps))
+    snaps))
+
+(defun my/restore-side-windows (snapshots)
+  "Restore side windows from SNAPSHOTS."
+  (dolist (snap snapshots)
+    (let* ((buf (plist-get snap :buffer))
+           (force-side (plist-get snap :force-side))
+           (side (or (plist-get snap :side) 'left))
+           (slot (plist-get snap :slot))
+           (width (plist-get snap :width))
+           (height (plist-get snap :height))
+           (params `((side . ,side)
+                     (slot . ,slot)))
+           (win (if force-side
+                    (display-buffer-in-side-window buf params)
+                  (display-buffer-in-side-window buf params))))
+      (when (window-live-p win)
+        (set-window-dedicated-p win (plist-get snap :dedicated))
+        (when (memq side '(left right))
+          (ignore-errors
+            (window-resize win (- width (window-total-width win)) t)))
+        (when (memq side '(top bottom))
+          (ignore-errors
+            (window-resize win (- height (window-total-height win)) nil)))))))
+
+(defun my/toggle-two-window-split ()
+  "Toggle split direction when exactly two main windows are present."
+  (let* ((wins (my/main-window-list)))
+    (when (= (length wins) 2)
+      (let* ((w1 (nth 0 wins))
+             (w2 (nth 1 wins))
+             (buf1 (window-buffer w1))
+             (buf2 (window-buffer w2))
+             (start1 (window-start w1))
+             (start2 (window-start w2))
+             (point1 (window-point w1))
+             (point2 (window-point w2))
+             (sel1 (eq (selected-window) w1))
+             (split-horiz (window-combined-p w1 'horizontal)))
+        (select-window w1)
+        (delete-other-windows w1)
+        (if split-horiz
+            (split-window-vertically)
+          (split-window-horizontally))
+        (let ((new1 (selected-window))
+              (new2 (next-window)))
+          (set-window-buffer new1 buf1)
+          (set-window-buffer new2 buf2)
+          (set-window-start new1 start1)
+          (set-window-start new2 start2)
+          (set-window-point new1 point1)
+          (set-window-point new2 point2)
+          (select-window (if sel1 new1 new2))))
+      t)))
+
+(defun my/rebuild-splits-opposite ()
+  "Rebuild main splits with opposite orientation, preserving buffers."
+  (let* ((wins (my/main-window-list))
+         (count (length wins)))
+    (when (> count 1)
+      (let* ((bufs (mapcar #'window-buffer wins))
+             (sel (selected-window))
+             (side-by-side (window-combined-p (car wins) 'horizontal))
+             (split-fn (if side-by-side
+                           #'split-window-vertically
+                         #'split-window-horizontally)))
+        (delete-other-windows (car wins))
+        (dotimes (_ (1- count))
+          (funcall split-fn)
+          (select-window (next-window)))
+        (let ((new-wins (my/main-window-list)))
+          (cl-mapc (lambda (w b) (set-window-buffer w b))
+                   new-wins bufs)
+          (when (window-live-p sel)
+            (select-window sel))))
+      t)))
+
+(defun my/toggle-window-split ()
+  "Toggle all window splits between horizontal and vertical."
+  (interactive)
+  (let* ((cur (selected-window))
+         (cur-frame (selected-frame))
+         (side-snapshots (my/side-window-snapshots))
+         (_state (window-state-get (frame-root-window) t)))
+    (dolist (win (my/side-window-list))
+      (delete-window win))
+    (when-let* ((treemacs-win (when (fboundp 'treemacs-get-local-window)
+                                (treemacs-get-local-window))))
+      (when (window-live-p treemacs-win)
+        (delete-window treemacs-win)))
+    (let ((ok (my/rebuild-splits-opposite)))
+      (unless ok
+        (message "Toggle split: no change (layout too constrained).")))
+    (my/restore-side-windows side-snapshots)
+    (when (window-live-p cur)
+      (select-frame-set-input-focus cur-frame)
+      (select-window cur))))
+
+
 
 (defun my/eldoc-show-help ()
   "Show docs in a popup when possible, otherwise fall back to the echo area."
