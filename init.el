@@ -4,7 +4,7 @@
 
 (defun my/load-config (file)
   "Load a config FILE from the user Emacs directory."
-  (load (expand-file-name file user-emacs-directory) nil 'nomessage))
+  (load-file (expand-file-name file user-emacs-directory)))
 
 (my/load-config "lisp/core.el")
 (my/load-config "lisp/ui.el")

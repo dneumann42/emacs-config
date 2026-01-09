@@ -102,6 +102,18 @@
   '((t :foreground "#999999"))
   "Face for muted dashboard text.")
 
+(defface my/dashboard-default-face
+  '((t :inherit fixed-pitch :background "#0f1218" :foreground "#d8dde5"))
+  "Face for the dashboard buffer.")
+
+(defface my/dashboard-card-face
+  '((t :background "#1a212b" :foreground "#d8dde5"))
+  "Face for dashboard cards.")
+
+(defface my/dashboard-card-shadow-face
+  '((t :background "#2f3845" :foreground "#2f3845"))
+  "Face for dashboard card shadows.")
+
 (defun my/dashboard-open-project-1 () (interactive) (my/dashboard-open-project-index 1))
 (defun my/dashboard-open-project-2 () (interactive) (my/dashboard-open-project-index 2))
 (defun my/dashboard-open-project-3 () (interactive) (my/dashboard-open-project-index 3))
@@ -175,6 +187,72 @@
         (with-current-buffer buf
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
+(defun my/dashboard--section-width ()
+  "Return a usable width for centered sections."
+  (let ((win (get-buffer-window my/dashboard-buffer-name)))
+    (min 88 (max 54 (or (and win (window-body-width win)) 80)))))
+
+(defun my/dashboard--center-line (line width)
+  "Center LINE within WIDTH."
+  (let* ((trim (truncate-string-to-width line width 0 ?\s))
+         (pad (max 0 (/ (- width (string-width trim)) 2))))
+    (concat (make-string pad ?\s) trim)))
+
+(defun my/dashboard--card-lines (text width)
+  "Return a list of padded lines for TEXT within WIDTH."
+  (let* ((lines (split-string (or text "") "\n"))
+         (inner (max 10 width)))
+    (mapcar (lambda (line)
+              (let ((trim (truncate-string-to-width line inner 0 ?\s)))
+                (concat trim (make-string (max 0 (- inner (string-width trim))) ?\s))))
+            lines)))
+
+(defun my/dashboard--insert-card (title body)
+  "Insert a centered card with TITLE and BODY."
+  (let* ((width (my/dashboard--section-width))
+         (inner (max 10 (- width 4)))
+         (lines (my/dashboard--card-lines body inner))
+         (title-text (truncate-string-to-width title (- inner 2) 0 ?\s))
+         (pad (max 0 (/ (- inner (string-width title-text)) 2)))
+         (title-line (concat (make-string pad ?\s) title-text))
+         (left (make-string (max 0 (/ (- (window-body-width) width) 2)) ?\s))
+         (shadow-left (concat left " "))
+         (card-width (+ inner 2)))
+    (insert left
+            (propertize "★" 'face 'my/dashboard-card-face)
+            (propertize (make-string (1- card-width) ?\s) 'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-default-face)
+            "\n")
+    (insert left
+            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize (my/dashboard--center-line title-line inner)
+                        'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-card-shadow-face)
+            "\n")
+    (dolist (line lines)
+      (insert left
+              (propertize " " 'face 'my/dashboard-card-face)
+              (propertize line 'face 'my/dashboard-card-face)
+              (propertize " " 'face 'my/dashboard-card-face)
+              (propertize " " 'face 'my/dashboard-card-face)
+              (propertize " " 'face 'my/dashboard-card-shadow-face)
+              "\n"))
+    (insert left
+            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize (make-string (1- card-width) ?\s) 'face 'my/dashboard-card-face)
+            (propertize "★" 'face 'my/dashboard-card-face)
+            (propertize " " 'face 'my/dashboard-card-shadow-face)
+            "\n")
+    (dotimes (_ 1)
+      (insert shadow-left
+              (propertize (make-string (1+ card-width) ?\s)
+                          'face 'my/dashboard-card-shadow-face)
+              "\n"))
+    (insert "\n")))
+
 (defun my/dashboard-refresh ()
   "Refresh the dashboard contents."
   (interactive)
@@ -183,32 +261,41 @@
       (my/dashboard-mode)
       (use-local-map my/dashboard-mode-map)
       (setq-local overriding-local-map my/dashboard-mode-map)
+      (setq-local truncate-lines t)
+      (setq-local display-line-numbers nil)
+      (setq-local cursor-type nil)
+      (setq-local face-remapping-alist `((default . my/dashboard-default-face)))
+      (when-let ((win (get-buffer-window buf)))
+        (set-window-margins win 0 0))
       (setq my/dashboard-projects (my/dashboard-projects))
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (propertize "Start" 'face 'my/dashboard-title-face) "\n\n")
-        (insert (propertize "Calendar" 'face 'my/dashboard-section-face) "\n")
-        (insert (propertize "────────" 'face 'my/dashboard-muted-face) "\n")
-        (insert (my/dashboard--calendar-string))
-        (insert "\n")
-        (insert "\n" (propertize "Agenda" 'face 'my/dashboard-section-face) "\n")
-        (insert (propertize "──────" 'face 'my/dashboard-muted-face) "\n")
-        (let ((agenda (my/dashboard--insert-agenda)))
-          (if (and agenda (stringp agenda))
-              (insert agenda)
-            (insert "No agenda items.\n")))
-        (insert "\n" (propertize "Recent Projects" 'face 'my/dashboard-section-face) "\n")
-        (insert (propertize "──────────────" 'face 'my/dashboard-muted-face) "\n")
-        (insert (propertize "Keys: 1-9 open project, g refresh"
-                            'face 'my/dashboard-help-face)
+        (insert (propertize "An editor for wizards" 'face 'my/dashboard-title-face)
                 "\n\n")
-        (if my/dashboard-projects
-            (cl-loop for proj in (seq-take my/dashboard-projects 9)
-                     for idx from 1 do
-                     (insert (propertize (format "%d. %s\n" idx proj)
-                                         'face 'my/dashboard-project-face)))
-          (insert (propertize "No projects found.\n"
-                              'face 'my/dashboard-muted-face)))))))
+        (my/dashboard--insert-card
+         (propertize "Calendar" 'face 'my/dashboard-section-face)
+         (my/dashboard--calendar-string))
+        (my/dashboard--insert-card
+         (propertize "Agenda" 'face 'my/dashboard-section-face)
+         (or (my/dashboard--insert-agenda) "No agenda items.\n"))
+        (my/dashboard--insert-card
+         (propertize "Recent Projects" 'face 'my/dashboard-section-face)
+         (concat
+          (propertize "Keys: 1-9 open project, g refresh\n"
+                      'face 'my/dashboard-help-face)
+          "\n"
+          (if my/dashboard-projects
+              (mapconcat (lambda (pair)
+                           (propertize (format "%d. %s" (car pair) (cdr pair))
+                                       'face 'my/dashboard-project-face))
+                         (cl-loop for proj in (seq-take my/dashboard-projects 9)
+                                  for idx from 1
+                                  collect (cons idx proj))
+                         "\n")
+            (propertize "No projects found."
+                        'face 'my/dashboard-muted-face))))))
+    (with-current-buffer buf
+      (goto-char (point-min)))))
 
 (defun my/dashboard-setup-windows ()
   "Show the start screen in a single window."
