@@ -13,3 +13,4 @@
 (my/load-config "lisp/projects.el")
 (my/load-config "lisp/completion.el")
 (my/load-config "lisp/theme.el")
+(my/load-config "chatgpt-api.el")

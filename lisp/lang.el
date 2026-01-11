@@ -196,6 +196,12 @@
 
 ;; Nim config - nimsuggest for docs, nim check for diagnostics.
 
+(when (and (fboundp 'treesit-available-p)
+           (treesit-available-p)
+           (boundp 'treesit-language-source-alist))
+  (add-to-list 'treesit-language-source-alist
+               '(nim "https://github.com/alaviss/tree-sitter-nim")))
+
 (use-package epc
   :ensure t)
 
@@ -204,13 +210,26 @@
 
 (use-package nim-mode
   :ensure nil
-  :mode (("\\.nim\\'" . nim-mode)
-         ("\\.nimble\\'" . nim-mode))
   :init
   (setq tags-add-tables nil)
   (setq tags-file-name nil)
   (setq tags-table-list nil)
   (require 'nim-mode nil t))
+
+(defun my/nim-mode-dispatch ()
+  "Use tree-sitter Nim mode when available."
+  (interactive)
+  (require 'nim-ts-mode nil t)
+  (if (and (fboundp 'nim-ts-mode)
+           (fboundp 'treesit-available-p)
+           (treesit-available-p)
+           (treesit-language-available-p 'nim))
+      (nim-ts-mode)
+    (nim-mode)))
+
+(add-to-list 'auto-mode-alist '("\\.nim\\'" . my/nim-mode-dispatch))
+(add-to-list 'auto-mode-alist '("\\.nimble\\'" . my/nim-mode-dispatch))
+(add-to-list 'auto-mode-alist '("\\.nims\\'" . nimscript-mode))
 
 (defvar nimsuggest-options nil)
 (defvar nimsuggest-local-options nil)
@@ -310,14 +329,108 @@
   (flymake-start)
   (add-hook 'after-save-hook #'flymake-start nil t))
 
+(defun my/nim--line-increases-indent-p (line)
+  "Return non-nil when LINE should increase indentation."
+  (or (string-match-p ":[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "=[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "^[[:space:]]*\\(let\\|var\\|const\\|type\\|case\\|proc\\|func\\|method\\|iterator\\|template\\|macro\\|converter\\|block\\|if\\|for\\|while\\|try\\|when\\)\\_>.*=[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "^[[:space:]]*\\w+[[:space:]]*=[[:space:]]*\\(object\\|tuple\\|enum\\)\\_>[[:space:]]*\\(#.*\\)?$" line)))
+
+(defun my/nim--line-outdents-p ()
+  "Return non-nil when the current line should outdent."
+  (save-excursion
+    (back-to-indentation)
+    (looking-at-p "\\(else\\|elif\\|of\\|except\\|finally\\)\\_>")))
+
+(defun my/nim--current-line-top-level-p ()
+  "Return non-nil when the current line starts a top-level block."
+  (save-excursion
+    (back-to-indentation)
+    (looking-at-p
+     "\\(proc\\|func\\|method\\|iterator\\|template\\|macro\\|converter\\|type\\|var\\|let\\|const\\|when\\|if\\|for\\|while\\|try\\|block\\)\\_>")))
+
+(defun my/nim--prev-line-blank-p ()
+  "Return non-nil when the previous line is blank."
+  (save-excursion
+    (forward-line -1)
+    (looking-at "^[[:space:]]*$")))
+
+(defun my/nim--parent-line-info ()
+  "Return a plist with the parent line's :indent and :line."
+  (save-excursion
+    (let ((base-indent nil)
+          (parent-indent nil)
+          (parent-line nil))
+      (while (and (not (bobp)) (null base-indent))
+        (forward-line -1)
+        (unless (looking-at "^[[:space:]]*$")
+          (setq base-indent (current-indentation))))
+      (when base-indent
+        (while (and (not (bobp)) (null parent-indent))
+          (forward-line -1)
+          (unless (looking-at "^[[:space:]]*$")
+            (when (< (current-indentation) base-indent)
+              (setq parent-indent (current-indentation))
+              (setq parent-line
+                    (buffer-substring-no-properties
+                     (line-beginning-position)
+                     (line-end-position)))))))
+      (when parent-indent
+        (list :indent parent-indent :line parent-line)))))
+
+(defun my/nim-indent-line ()
+  "Indent Nim line using simple block heuristics."
+  (let* ((offset (if (boundp 'nim-indent-offset) nim-indent-offset 2))
+         (savep (> (current-column) (current-indentation)))
+         (parent (my/nim--parent-line-info))
+         (indent (condition-case _err
+                     (save-excursion
+                       (let ((found nil)
+                             (base 0)
+                             (increase nil))
+                         (while (and (not found) (not (bobp)))
+                           (forward-line -1)
+                           (unless (looking-at "^[[:space:]]*$")
+                             (setq found t)
+                             (setq base (current-indentation))
+                             (setq increase
+                                   (my/nim--line-increases-indent-p
+                                    (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position))))))
+                         (max 0 (+ base (if increase offset 0)))))
+                   (error 0))))
+    (when (my/nim--line-outdents-p)
+      (setq indent (max 0 (- indent offset))))
+    (when (and (my/nim--current-line-top-level-p)
+               (plist-get parent :line)
+               (string-match-p "^[[:space:]]*type\\_>" (plist-get parent :line)))
+      ;; When leaving a type block, align with the `type` line.
+      (setq indent (plist-get parent :indent)))
+    (when (and (my/nim--current-line-top-level-p)
+               (my/nim--prev-line-blank-p)
+               (plist-get parent :indent))
+      ;; After a blank line, reset top-level forms to their parent indent.
+      (setq indent (plist-get parent :indent)))
+    (if savep
+        (save-excursion (indent-line-to indent))
+      (indent-line-to indent))))
+
 (defun my/nim-safe-indent ()
   "Indent Nim safely; fall back instead of throwing SMIE errors."
   (interactive)
   (condition-case err
-      (nim-indent-line)
+      (cond
+       ((fboundp 'my/nim-indent-line) (my/nim-indent-line))
+       ((fboundp 'nim--indent-line) (nim--indent-line))
+       ((fboundp 'nim-indent-line) (nim-indent-line))
+       (t (indent-relative)))
     (error
      (message "Nim indent fallback: %s" (error-message-string err))
-     (indent-relative))))
+     (cond
+      ((fboundp 'my/nim-indent-line) (my/nim-indent-line))
+      ((fboundp 'nim--indent-line) (nim--indent-line))
+      (t (indent-relative))))))
 
 (defun my/nim-safe-forward-sexp (arg)
   "Move forward across Nim sexps safely, falling back on errors.
@@ -329,6 +442,69 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
         (forward-sexp arg))
     (error
      (message "Nim sexp fallback: %s" (error-message-string err))))) 
+
+(defvar my/nimsuggest-completion-timeout 0.35
+  "Maximum time in seconds to wait for nimsuggest completions.")
+
+(defun my/nimsuggest--candidate-name (item)
+  "Return the best display name for ITEM."
+  (let ((qpath (nim--epc-qpath item)))
+    (cond
+     ((stringp qpath) qpath)
+     ((and (listp qpath) (car (last qpath))) (car (last qpath)))
+     (t nil))))
+
+(defun my/nimsuggest--call-sync (method callback)
+  "Call nimsuggest with METHOD and return CALLBACK result or nil on timeout."
+  (let* ((buf (current-buffer))
+         (start (time-to-seconds))
+         (res :pending))
+    (nimsuggest--call-epc
+     method
+     (lambda (candidates)
+       (when (eq (current-buffer) buf)
+         (setq res (funcall callback candidates)))))
+    (while (and (eq res :pending)
+                (eq (current-buffer) buf)
+                (< (- (time-to-seconds) start) my/nimsuggest-completion-timeout))
+      (accept-process-output nil 0.02))
+    (unless (eq res :pending)
+      res)))
+
+(defun my/nimsuggest--format-candidates (items)
+  "Format nimsuggest ITEMS into completion candidates."
+  (let (out)
+    (dolist (item items)
+      (let ((name (my/nimsuggest--candidate-name item)))
+        (when (and name (> (length name) 0))
+          (let ((cand (copy-sequence name)))
+            (put-text-property 0 (length cand) 'my/nimsuggest-epc item cand)
+            (push cand out)))))
+    (delete-dups (nreverse out))))
+
+(defun my/nimsuggest-capf ()
+  "Completion-at-point backend for Nim using nimsuggest."
+  (when (and (fboundp 'nimsuggest-available-p)
+             (nimsuggest-available-p)
+             (buffer-file-name))
+    (let ((end (point))
+          (start (save-excursion
+                   (skip-syntax-backward "w_")
+                   (point))))
+      (when (< start end)
+        (let ((candidates
+               (my/nimsuggest--call-sync
+                'sug
+                (lambda (items)
+                  (my/nimsuggest--format-candidates items)))))
+          (when (and candidates (listp candidates))
+            (list start end candidates
+                  :annotation-function
+                  (lambda (cand)
+                    (let ((item (get-text-property 0 'my/nimsuggest-epc cand)))
+                      (when item
+                        (format " %s" (nim--epc-symkind item)))))
+                  :exclusive 'no)))))))
 
 (defun my/nim--diagnostic-at-point ()
   "Return the first Flymake diagnostic on the current line."
@@ -519,22 +695,35 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
 
 (defun my/nim-setup-nimsuggest ()
   "Configure Nim docs via nimsuggest and diagnostics via nim check."
-  (when (fboundp 'nimsuggest-mode)
-    (nimsuggest-mode 1))
+  (if (derived-mode-p 'nim-ts-mode)
+      (when (fboundp 'nimsuggest-ensure)
+        (condition-case err
+            (nimsuggest-ensure)
+          (error
+           (message "Nim suggest skipped: %s" (error-message-string err)))))
+    (when (fboundp 'nimsuggest-mode)
+      (nimsuggest-mode 1)))
   (when (fboundp 'nimsuggest-eldoc--nimsuggest)
     (setq-local eldoc-documentation-function
                 (lambda (&rest _args)
                   (nimsuggest-eldoc--nimsuggest))))
+  (setq-local tab-width 2)
+  (setq-local indent-tabs-mode nil)
+  (setq-local nim-indent-offset 2)
   (local-set-key (kbd "C-M-<return>") #'my/nim-show-doc-or-diagnostic)
   (setq-local tags-file-name nil)
-  ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
-  (setq-local indent-line-function #'my/nim-safe-indent)
-  ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
-  (setq-local forward-sexp-function #'my/nim-safe-forward-sexp)
+  (unless (derived-mode-p 'nim-ts-mode)
+    ;; Avoid SMIE crashes during indentation by wrapping nim-indent-line.
+    (setq-local indent-line-function #'my/nim-safe-indent)
+    ;; Avoid SMIE crashes during sexp movement (C-M-SPC/mark-sexp).
+    (setq-local forward-sexp-function #'my/nim-safe-forward-sexp))
+  (add-hook 'completion-at-point-functions #'my/nimsuggest-capf nil t)
   (when (fboundp 'flycheck-mode)
     (flycheck-mode -1))
-  (my/nim-flymake-setup))
+  (unless (derived-mode-p 'nimscript-mode)
+    (my/nim-flymake-setup)))
 (add-hook 'nim-mode-hook #'my/nim-setup-nimsuggest)
+(add-hook 'nim-ts-mode-hook #'my/nim-setup-nimsuggest)
 (add-hook 'nimscript-mode-hook #'my/nim-setup-nimsuggest)
 
 ;; TAGS generation via ntagger on first xref jump.
@@ -726,7 +915,7 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
 
 (defun my/nim-xref-backend ()
   "Use ntagger TAGS for Nim xref."
-  (when (derived-mode-p 'nim-mode)
+  (when (derived-mode-p 'nim-mode 'nim-ts-mode)
     'nim-ntagger))
 
 (with-eval-after-load 'xref
@@ -738,6 +927,7 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
     (setq-local xref-backend-functions '(my/nim-xref-backend))
     (setq-local tags-table-list nil))
   (add-hook 'nim-mode-hook #'my/nim-xref-setup)
+  (add-hook 'nim-ts-mode-hook #'my/nim-xref-setup)
   (cl-defmethod xref-backend-identifier-at-point ((_backend (eql nim-ntagger)))
     (thing-at-point 'symbol t))
   (cl-defmethod xref-backend-definitions ((_backend (eql nim-ntagger)) symbol)

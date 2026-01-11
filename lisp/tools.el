@@ -28,6 +28,8 @@
     common-lisp-mode)
    . (lambda ()
        (setq indent-tabs-mode nil)
+       (when (boundp 'electric-pair-mode)
+         (electric-pair-local-mode -1))
        (parinfer-rust-mode 1))))
 
 (use-package eros

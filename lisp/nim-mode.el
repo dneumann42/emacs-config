@@ -190,14 +190,47 @@
     st)
   "Syntax table for `nim-mode'.")
 
+(defcustom nim-indent-offset 2
+  "Indentation offset for `nim-mode'."
+  :type 'integer
+  :group 'nim)
+
+(defun nim--line-increases-indent-p (line)
+  "Return non-nil when LINE should increase indentation."
+  (or (string-match-p ":[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "=[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "^[[:space:]]*\\(let\\|var\\|const\\|type\\|case\\)\\_>[[:space:]]*\\(#.*\\)?$" line)
+      (string-match-p "^[[:space:]]*\\w+[[:space:]]*=[[:space:]]*\\(object\\|tuple\\|enum\\)\\_>[[:space:]]*\\(#.*\\)?$" line)))
+
+(defun nim--line-outdents-p ()
+  "Return non-nil when the current line should outdent."
+  (save-excursion
+    (back-to-indentation)
+    (looking-at-p "\\(else\\|elif\\|of\\|except\\|finally\\)\\_>")))
+
 (defun nim--indent-line ()
   "Indent current line in a basic, safe way."
   (let ((savep (> (current-column) (current-indentation)))
+        (offset (if (boundp 'nim-indent-offset) nim-indent-offset 2))
         (indent (condition-case _err
-                    (max 0 (save-excursion
-                             (forward-line -1)
-                             (current-indentation)))
+                    (save-excursion
+                      (let ((found nil)
+                            (base 0)
+                            (increase nil))
+                        (while (and (not found) (not (bobp)))
+                          (forward-line -1)
+                          (unless (looking-at "^[[:space:]]*$")
+                            (setq found t)
+                            (setq base (current-indentation))
+                            (setq increase
+                                  (nim--line-increases-indent-p
+                                   (buffer-substring-no-properties
+                                    (line-beginning-position)
+                                    (line-end-position))))))
+                        (max 0 (+ base (if increase offset 0)))))
                   (error 0))))
+    (when (nim--line-outdents-p)
+      (setq indent (max 0 (- indent offset))))
     (if savep
         (save-excursion (indent-line-to indent))
       (indent-line-to indent))))
@@ -218,9 +251,15 @@
   (setq-local indent-line-function #'nim--indent-line))
 
 ;;;###autoload
+(define-derived-mode nimscript-mode nim-mode "NimScript"
+  "Major mode for editing Nimscript files.")
+
+;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.nim\\'" . nim-mode))
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.nimble\\'" . nim-mode))
+;;;###autoload
+(add-to-list 'auto-mode-alist '("\\.nims\\'" . nimscript-mode))
 
 (provide 'nim-mode)
 ;;; nim-mode.el ends here

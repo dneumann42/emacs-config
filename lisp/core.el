@@ -2,6 +2,7 @@
 
 (require 'package)
 (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+(add-to-list 'package-archives '("jcs-elpa" . "https://jcs-emacs.github.io/jcs-elpa/packages/") t)
 (package-initialize)
 (require 'subr-x)
 (require 'seq)
@@ -281,7 +282,6 @@
     (with-current-buffer buf
       (my/dashboard-mode)
       (use-local-map my/dashboard-mode-map)
-      (setq-local overriding-local-map my/dashboard-mode-map)
       (setq-local truncate-lines t)
       (setq-local display-line-numbers nil)
       (setq-local cursor-type nil)
@@ -347,6 +347,15 @@
 
 (global-display-line-numbers-mode 1)
 (prettify-symbols-mode 1)
+(electric-pair-mode 1)
+(show-paren-mode 1)
+
+(setq electric-pair-pairs
+      '((?\( . ?\))
+        (?\[ . ?\])
+        (?\{ . ?\})
+        (?\< . ?\>)))
+(setq electric-pair-text-pairs electric-pair-pairs)
 
 (global-set-key (kbd "C-c t n") #'tab-line-switch-to-next-tab)
 (global-set-key (kbd "C-c t p") #'tab-line-switch-to-prev-tab)
@@ -724,5 +733,9 @@ INTERACTIVE is ignored; always fetches the buffer silently."
       nil)
      ((my/eglot-server-available-p)
       (eglot-ensure)))))
+
+(use-package chatgpt
+  :ensure t
+  :config)
 
 (provide 'core)

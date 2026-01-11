@@ -56,10 +56,12 @@
       (corfu-mode -1)))
   (add-hook 'minibuffer-setup-hook #'my/corfu-disable-in-minibuffer)
 
-  ;; Nim completions can be heavy; keep Corfu but disable auto popup there.
+  ;; Nim completions via nimsuggest are now snappy enough for auto popup.
   (add-hook 'nim-mode-hook
             (lambda ()
-              (setq-local corfu-auto nil))))
+              (setq-local corfu-auto t)
+              (setq-local corfu-auto-delay 0.2)
+              (setq-local corfu-auto-prefix 2))))
 
 (use-package dockerfile-mode
   :ensure
