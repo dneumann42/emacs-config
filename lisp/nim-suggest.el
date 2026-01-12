@@ -264,7 +264,7 @@ The CALLBACK is called with a list of ‘nim--epc’ structs."
 This feature will be blocked on this %s."
                 (/ (* nimsuggest-accept-process-delay
                       nimsuggest-accept-process-timeout-count)
-                      1000)
+                   1000)
                 file))
       (ready
        (nimsuggest--query method callback (nimsuggest--get-epc-process file))
@@ -758,7 +758,7 @@ DEFS is group of definitions from nimsuggest."
   (let ((data (cl-first defs)))
     (apply 'nimsuggest--format
            (mapcar (lambda (x) (funcall x data))
-           '(nim--epc-forth nim--epc-symkind nim--epc-qpath nim--epc-doc)))))
+            '(nim--epc-forth nim--epc-symkind nim--epc-qpath nim--epc-doc)))))
 
 (defun nimsuggest-eldoc--call ()
   "Call nimsuggest for eldoc."
@@ -873,12 +873,12 @@ binds to `M-.' in default."
   ;; just define empty backend to use `xref-backend-references' for
   ;; nimsuggest.
   (cl-defmethod xref-backend-identifier-completion-table
-    ((_backend (eql nimsuggest))))
+    ((_backend (eql nimsuggest)))))
 
   ;; Not implement yet, or not sure maybe, won't...
   ;; (cl-defmethod xref-backend-apropos ((_backend (eql nimsuggest)) pattern))
 
-  ) ; end of with-eval-after-load xref
+   ; end of with-eval-after-load xref
 
 ;; Workaround for old Emacsen
 ;; TODO: remove those stuff after Emacs 25 or 26 is dominant.

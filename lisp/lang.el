@@ -91,28 +91,6 @@
   :hook
   ((rust-mode rust-ts-mode) . my/eglot-ensure-maybe))
 
-(use-package org
-  :ensure t
-  :init
-  (setq org-hide-leading-stars t)
-  :config
-  (dolist (face-scale '((org-document-title . 3.0)
-                        (org-level-1 . 2.5)
-                        (org-level-2 . 2.0)
-                        (org-level-3 . 1.5)
-                        (org-level-4 . 1.0)
-                        (org-level-5 . 1.0)
-                        (org-level-6 . 1.0)
-                        (org-level-7 . 1.0)
-                        (org-level-8 . 1.0)))
-    (set-face-attribute (car face-scale) nil :weight 'bold :height (cdr face-scale))))
-
-(use-package org-bullets
-  :ensure t
-  :after org
-  :hook
-  (org-mode . org-bullets-mode))
-
 (defun my/typescript-eldoc-box-prettify ()
   "Prettify TS/JS Eldoc popups by using eldoc-box' TS formatter."
   (when (require 'eldoc-box nil t)
@@ -657,7 +635,7 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
                    my/nim--diagnostic-source-line nil)
              (my/nim--hide-diagnostic-child-frame)
              (my/eldoc-restore-focus)))))))
-    (add-hook 'post-command-hook #'my/nim--maybe-hide-diagnostic-on-move))
+  (add-hook 'post-command-hook #'my/nim--maybe-hide-diagnostic-on-move))
 
 
 (defun my/nim--show-diagnostic-window (diag)

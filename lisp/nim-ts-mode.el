@@ -43,16 +43,16 @@
    :feature 'function
    '((call
       function: [
-        (identifier) @font-lock-function-call-face
-        (dot_expression
-         right: (identifier) @font-lock-function-call-face)
-      ])
+                 (identifier) @font-lock-function-call-face
+                 (dot_expression
+                  right: (identifier) @font-lock-function-call-face)])
+      
      (generalized_string
       function: [
-        (identifier) @font-lock-function-call-face
-        (dot_expression
-         right: (identifier) @font-lock-function-call-face)
-      ])
+                 (identifier) @font-lock-function-call-face
+                 (dot_expression
+                  right: (identifier) @font-lock-function-call-face)])
+      
      (proc_declaration name: (_) @font-lock-function-name-face)
      (func_declaration name: (_) @font-lock-function-name-face)
      (converter_declaration name: (_) @font-lock-function-name-face)
@@ -71,14 +71,14 @@
      (_
       [
        type: [
-         (type_expression (identifier))
-         (type_expression (accent_quoted (identifier)))
-       ] @font-lock-type-face
+              (type_expression (identifier))
+              (type_expression (accent_quoted (identifier)))]
+        @font-lock-type-face
        return_type: [
-         (type_expression (identifier))
-         (type_expression (accent_quoted (identifier)))
-       ] @font-lock-type-face
-      ])
+                     (type_expression (identifier))
+                     (type_expression (accent_quoted (identifier)))]
+        @font-lock-type-face])
+      
      (except_branch
       values: (expression_list
                [
@@ -86,8 +86,8 @@
                 (infix_expression
                  left: (identifier) @font-lock-type-face
                  operator: "as"
-                 right: (identifier) @font-lock-variable-name-face)
-                ])))
+                 right: (identifier) @font-lock-variable-name-face)])))
+                
    :language 'nim
    :feature 'property
    '((dot_expression right: (identifier) @font-lock-property-name-face))
@@ -102,8 +102,8 @@
      (for "in" @font-lock-keyword-face)
      [ "macro" "template" "const" "let" "var" "asm" "bind" "block"
        "concept" "defer" "discard" "distinct" "do" "enum" "mixin"
-       "nil" "object" "out" "ptr" "ref" "static" "tuple" "type"
-       ] @font-lock-keyword-face
+       "nil" "object" "out" "ptr" "ref" "static" "tuple" "type"]
+     @font-lock-keyword-face
      [ "proc" "func" "method" "converter" "iterator" ] @font-lock-keyword-face
      [ "and" "or" "xor" "not" "div" "mod" "shl" "shr" "from" "as"
        "of" "in" "notin" "is" "isnot" "cast" ] @font-lock-operator-face

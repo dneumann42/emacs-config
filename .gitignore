@@ -17,3 +17,4 @@ wallust-theme.el
 chatgpt-api.el
 *.so
 /request/
+/url/

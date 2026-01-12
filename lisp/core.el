@@ -1,12 +1,20 @@
 ;;; core.el --- Core settings -*- lexical-binding: t -*-
 
 (require 'package)
-(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
-(add-to-list 'package-archives '("jcs-elpa" . "https://jcs-emacs.github.io/jcs-elpa/packages/") t)
+
+(setq
+ package-archives
+ '(("gnu"    . "https://elpa.gnu.org/packages/")
+   ("nongnu" . "https://elpa.nongnu.org/nongnu/")
+   ("melpa" . "https://melpa.org/packages/")
+   ("jcs-elpa" . "https://jcs-emacs.github.io/jcs-elpa/packages/")))
+
 (package-initialize)
+
 (require 'subr-x)
 (require 'seq)
 (require 'cl-lib)
+(require 'calendar)
 
 ;; Avoid auto-loading TAGS files (ntagger emits ctags format).
 (setq tags-add-tables nil
@@ -177,24 +185,27 @@
 
 (defun my/dashboard--calendar-string ()
   "Return a string for the current month calendar."
-  (let* ((date (calendar-current-date))
-         (month (nth 0 date))
-         (year (nth 2 date)))
+  (let* ((decoded-time (decode-time (current-time)))
+         (year (nth 5 decoded-time))
+         (month (nth 4 decoded-time))
+         (day (nth 3 decoded-time)))
     (with-temp-buffer
-      (calendar-generate-month month year 1)
-      (goto-char (point-min))
-      (add-face-text-property (line-beginning-position) (line-end-position)
-                              'my/dashboard-calendar-header-face)
-      (forward-line 1)
-      (add-face-text-property (line-beginning-position) (line-end-position)
-                              'my/dashboard-calendar-header-face)
-      (goto-char (point-min))
-      (when (re-search-forward
-             (format "\\(?:^\\|\\s-\\)\\(%2d\\)\\(?:\\s-\\|$\\)" (nth 1 date))
-             nil t)
-        (add-face-text-property (match-beginning 1) (match-end 1)
-                                'my/dashboard-calendar-today-face))
-      (buffer-string))))
+     (calendar-generate-month month year 1)
+     (goto-char (point-min))
+     (add-face-text-property (line-beginning-position) (line-end-position)
+                             'my/dashboard-calendar-header-face)
+     (forward-line 1)
+     (add-face-text-property (line-beginning-position) (line-end-position)
+                             'my/dashboard-calendar-header-face)
+     (goto-char (point-min))
+     (when (re-search-forward
+            (format "\\(?:^\\|\\s-\\)\\(%2d\\)\\(?:\\s-\\|$\\)" day)
+            nil t)
+       (add-face-text-property (match-beginning 1) (match-end 1)
+                               'my/dashboard-calendar-today-face))
+     (buffer-string))))
+
+;; (my/dashboard--calendar-string)
 
 (defun my/dashboard--insert-agenda ()
   "Insert today's agenda into the dashboard buffer."

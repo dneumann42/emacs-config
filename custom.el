@@ -13,11 +13,14 @@
                       eldoc-box embark-consult eros geiser-guile
                       json-mode line-reminder marginalia markdown-mode
                       multiple-cursors nim-mode org-bullets
-                      parinfer-rust-mode rust-mode shell-pop
-                      sly-quicklisp treemacs-icons-dired
+                      org-remoteimg parinfer-rust-mode rust-mode
+                      shell-pop sly-quicklisp treemacs-icons-dired
                       treemacs-magit treemacs-projectile
                       typescript-mode ultra-scroll vertico
-                      volatile-highlights yaml-mode yascroll zoom)))
+                      volatile-highlights yaml-mode yascroll zoom))
+ '(package-vc-selected-packages
+   '((org-remoteimg :vc-backend Git :url
+                    "https://github.com/gaoDean/org-remoteimg"))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
