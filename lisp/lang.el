@@ -69,10 +69,13 @@
 
 (defun my/c-style ()
   (setq-local c-basic-offset 4
+              c-ts-mode-indent-offset 4
               tab-width 4
               indent-tabs-mode nil))
 
 (add-hook 'c-mode-common-hook #'my/c-style)
+(add-hook 'c-ts-mode-hook #'my/c-style)
+(add-hook 'c++-ts-mode-hook #'my/c-style)
 
 (use-package typescript-mode
   :ensure t
@@ -927,5 +930,8 @@ ARG is forwarded to `smie-forward-sexp' or `forward-sexp'."
   :ensure t
   :hook
   (json-mode . eglot-ensure))
+
+;; Wyrm scripting language
+(require 'wyrm-mode)
 
 (provide 'lang)

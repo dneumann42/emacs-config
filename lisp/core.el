@@ -84,6 +84,53 @@
 (global-auto-revert-mode 1)
 (pixel-scroll-precision-mode 1)
 
+
+
+;; Bookmarks
+(setq bookmark-default-file
+      (expand-file-name ".bookmarks" user-emacs-directory))
+
+(defun my/bookmark-set-here ()
+  (interactive)
+  (if-let* ((f (buffer-file-name)))
+      (let* ((line (line-number-at-pos))
+             (name (format "%s:%d" (file-name-nondirectory f) line)))
+        (bookmark-set name)
+        (message "Bookmark set: %s" name))
+    (call-interactively #'bookmark-set)))
+
+(defun my/bookmark-jump ()
+  (interactive)
+  (push-mark)
+  (call-interactively #'bookmark-jump))
+
+(defun my/jump-back ()
+  (interactive)
+  (cond
+   ((fboundp 'xref-pop-marker-stack)
+    (xref-pop-marker-stack))
+   (t
+    (pop-mark))))
+
+(defun my/push-xref-marker ()
+  "Push current location to the xref marker stack (if available)."
+  (when (boundp 'xref--marker-stack)
+    (require 'xref)
+    (xref-push-marker-stack)))
+
+(advice-add 'my/bookmark-jump :before #'my/push-xref-marker)
+
+(global-set-key (kbd "C-c m") #'my/bookmark-set-here)
+(global-set-key (kbd "C-c C-j") #'my/bookmark-jump)
+(global-set-key (kbd "C-c b") #'my/jump-back)
+(global-set-key (kbd "C-c M") #'bookmark-set)   ;; prompt for name
+(global-set-key (kbd "C-c J") #'bookmark-bmenu-list) ;; list UI
+
+;; 
+
+;;; Persist bookmarks
+(setq bookmark-save-flag t)
+
 ;; Dashboard
 (setq inhibit-startup-screen t)
 
@@ -400,7 +447,7 @@
 (defun my/window-main-root ()
   "Return the root window of the main area, excluding side windows."
   (let ((root (frame-root-window)))
-    (if-let ((child (window-child root)))
+    (if-let* ((child (window-child root)))
         (let ((node child)
               found)
           (while node
@@ -748,5 +795,10 @@ INTERACTIVE is ignored; always fetches the buffer silently."
 (use-package chatgpt
   :ensure t
   :config)
+
+;; Start the Emacs server so emacsclient can connect
+(require 'server)
+(unless (server-running-p)
+  (server-start))
 
 (provide 'core)

@@ -18,3 +18,4 @@ chatgpt-api.el
 *.so
 /request/
 /url/
+.bookmarks

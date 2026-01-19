@@ -11,3 +11,4 @@
 (load "completion")
 (load "theme")
 (load "org-settings")
+(load "help")

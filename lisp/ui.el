@@ -1,5 +1,50 @@
 ;;; ui.el --- UI helpers -*- lexical-binding: t -*-
 
+;; Configure Hasklug Nerd Font as default
+(defun my/setup-hasklug-font ()
+  "Set up Hasklug Nerd Font as the default monospace font."
+  (when (display-graphic-p)
+    (when (member "Hasklug Nerd Font Mono" (font-family-list))
+      (set-face-attribute 'default nil
+                          :family "Hasklug Nerd Font Mono"
+                          :height 110)
+      (set-face-attribute 'fixed-pitch nil
+                          :family "Hasklug Nerd Font Mono"))))
+
+(add-hook 'after-init-hook #'my/setup-hasklug-font)
+(add-hook 'server-after-make-frame-hook #'my/setup-hasklug-font)
+
+;; Ligature support for programming
+(use-package ligature
+  :ensure t
+  :config
+  ;; Enable all Hasklig/Hasklug ligatures in programming modes
+  (ligature-set-ligatures 'prog-mode
+                          '("&&" "***" "*>" "\\\\" "||" "|>" "::"
+                            "==" "===" "==>" "=>" "=<<" "!!" ">>"
+                            ">>=" ">>>" ">>-" ">-" "->" "-<" "-<<"
+                            "<*" "<*>" "<|" "<|>" "<$>" "<>" "<-"
+                            "<<" "<<<" "<+>" ".." "..." "++" "+++"
+                            "/=" ":::" ">=>" "->>" "<=>" "<=<" "<->"))
+  (global-ligature-mode t))
+
+;; Configure emoji and symbol fonts
+(defun my/setup-emoji-fonts ()
+  "Set up fonts for emoji and Unicode symbols."
+  (when (display-graphic-p)
+    ;; Noto Color Emoji for emoji characters
+    (when (member "Noto Color Emoji" (font-family-list))
+      (set-fontset-font t 'emoji "Noto Color Emoji" nil 'prepend)
+      (set-fontset-font t 'symbol "Noto Color Emoji" nil 'prepend))
+    ;; Noto Sans Symbols for other Unicode symbols
+    (when (member "Noto Sans Symbols" (font-family-list))
+      (set-fontset-font t 'symbol "Noto Sans Symbols" nil 'append))
+    (when (member "Noto Sans Symbols2" (font-family-list))
+      (set-fontset-font t 'symbol "Noto Sans Symbols2" nil 'append))))
+
+(add-hook 'after-init-hook #'my/setup-emoji-fonts)
+(add-hook 'server-after-make-frame-hook #'my/setup-emoji-fonts)
+
 (use-package line-reminder
   :ensure t
   :config

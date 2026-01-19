@@ -1,0 +1,7 @@
+#!/bin/bash
+# Install em script to ~/.alatar/scripts as ed
+
+mkdir -p ~/.alatar/scripts
+cp ~/.emacs.d/bin/em ~/.alatar/scripts/ed
+chmod +x ~/.alatar/scripts/ed
+echo "Installed to ~/.alatar/scripts/ed"
