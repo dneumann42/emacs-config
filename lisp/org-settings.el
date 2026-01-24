@@ -4,6 +4,7 @@
 (require 'org)
 (require 'org-element)
 (require 'ob)
+(require 'ob-tcl)
 
 ;;; Journal helpers
 
@@ -60,7 +61,7 @@
         org-image-actual-width 64
         org-display-remote-inline-images 'cache
         url-automatic-caching t
-        org-startup-folded 'content
+        org-startup-folded nil
         org-confirm-babel-evaluate nil
         org-babel-default-header-args
         (cons '(:results . "output drawer replace")
@@ -93,6 +94,7 @@
                         (org-level-7 . 1.0)
                         (org-level-8 . 1.0)))
     (set-face-attribute (car face-scale) nil :weight 'bold :height (cdr face-scale)))
+  (set-face-attribute 'org-level-1 nil :underline t)
 
   (with-eval-after-load 'calendar
     (define-key calendar-mode-map (kbd "j") #'my/org-journal-open-from-calendar))
@@ -111,7 +113,8 @@
      (C          . t)
      (dot        . t)
      (plantuml   . t)
-     (latex      . t))))
+     (latex      . t)
+     (tcl        . t))))
 
 (defun my/org-sync ()
   (interactive)
@@ -165,7 +168,13 @@
   (set-face-attribute 'org-verbatim nil
                       :inherit 'fixed-pitch
                       :background "#1e1e1e"
-                      :box '(:line-width 1 :color "#333333" :style released-button)))
+                      :box '(:line-width 1 :color "#333333" :style released-button))
+  (set-face-attribute 'org-block nil
+                      :background "#1e1e1e"
+                      :extend t)
+  (set-face-attribute 'region nil
+                      :background "#3e4a5b"
+                      :extend t))
 
 ;;; Inline buttons
 
@@ -178,7 +187,8 @@
 
 (defvar my/org-inline-button-actions
   '(("Run"    . my/org-inline-button-run-next-src)
-    ("Export" . my/org-inline-button-export-dispatch))
+    ("Export" . my/org-inline-button-export-dispatch)
+    ("Export PDF" . my/org-export-pdf))
   "Alist mapping button labels to functions.")
 
 (defun my/org-inline-button--action (label)
@@ -213,6 +223,11 @@
   (interactive)
   (call-interactively #'org-export-dispatch))
 
+(defun my/org-export-pdf ()
+  "Export pdf of org document"
+  (interactive)
+  (call-interactively #'org-latex-export-to-pdf))
+
 (defun my/org-inline-buttons-clear ()
   "Remove all inline button overlays in the current buffer."
   (interactive)
@@ -230,13 +245,18 @@
              (end   (match-end 0))
              (ov (make-overlay start end nil t t))
              (cmd (my/org-inline-button--action label))
-             (map (make-sparse-keymap)))
+             (map (make-sparse-keymap))
+             (spc-cmd (lambda ()
+                        (interactive)
+                        (if (and (> (point) start) (< (point) end))
+                            (funcall cmd)
+                          (insert " ")))))
         (overlay-put ov 'priority 1000)
         (overlay-put ov 'evaporate t)
         (overlay-put ov 'display label)
         (define-key map [mouse-1] cmd)
         (define-key map (kbd "RET") cmd)
-        (define-key map (kbd "SPC") cmd)
+        (define-key map (kbd "SPC") spc-cmd)
         (overlay-put ov 'keymap map)
         (overlay-put ov 'mouse-face 'highlight)
         (overlay-put ov 'help-echo (format "%s" label))
@@ -400,7 +420,7 @@
   (my/org-hide-results-label-clear)
   (save-excursion
     (goto-char (point-min))
-    (while (re-search-forward "^[ \t]*RESULTS:[ \t]*\n" nil t)
+    (while (re-search-forward "^[ \t]*#\\+RESULTS:.*\n" nil t)
       (let ((ov (make-overlay (match-beginning 0) (match-end 0) nil t t)))
         (overlay-put ov 'display "")
         (overlay-put ov 'evaporate t)
