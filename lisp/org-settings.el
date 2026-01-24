@@ -226,7 +226,8 @@
     ("Export"     . my/org-inline-button-export-dispatch)
     ("Export PDF" . my/org-export-pdf)
     ("Clean"      . my/org-clean-all-results)
-    ("Eval All"   . my/org-eval-all-src-blocks))
+    ("Eval All"   . my/org-eval-all-src-blocks)
+    ("+"          . my/org-table-add-row-above))
   "Alist mapping button labels to functions.")
 
 (defun my/org-inline-button--action (label)
@@ -278,6 +279,18 @@
   "Evaluate all source blocks in the buffer."
   (interactive)
   (org-babel-execute-buffer))
+
+(defun my/org-table-add-row-above ()
+  "Add a new row at the end of the table above point."
+  (interactive)
+  (save-excursion
+    (forward-line -1)
+    (while (and (not (bobp))
+                (not (org-at-table-p)))
+      (forward-line -1))
+    (when (org-at-table-p)
+      (goto-char (1- (org-table-end)))
+      (org-table-insert-row 'below))))
 
 (defun my/org-inline-buttons-clear ()
   "Remove all inline button overlays in the current buffer."

@@ -31,16 +31,12 @@
   "Face for muted dashboard text.")
 
 (defface my/dashboard-default-face
-  '((t :inherit fixed-pitch :background "#0f1218" :foreground "#d8dde5"))
+  '((t :inherit fixed-pitch :foreground "#d8dde5"))
   "Face for the dashboard buffer.")
 
-(defface my/dashboard-card-face
-  '((t :background "#1b2432"))
-  "Face for dashboard cards.")
-
-(defface my/dashboard-card-shadow-face
-  '((t :background "#2a3442" :foreground "#2a3442"))
-  "Face for dashboard card shadows.")
+(defface my/dashboard-card-border-face
+  '((t :foreground "#7fd6ff"))
+  "Face for dashboard card borders.")
 
 (defface my/dashboard-calendar-header-face
   '((t :foreground "#7fd6ff" :weight bold))
@@ -161,47 +157,43 @@
   (let* ((width (my/dashboard--section-width))
          (inner (max 10 (- width 4)))
          (lines (my/dashboard--card-lines body inner))
-         (title-text (truncate-string-to-width title (- inner 2) 0 ?\s))
+         (title-text (truncate-string-to-width title (- inner 4) 0 ?\s))
          (pad (max 0 (/ (- inner (string-width title-text)) 2)))
          (title-line (concat (make-string pad ?\s) title-text))
          (left (make-string (max 0 (/ (- (window-body-width) width) 2)) ?\s))
-         (shadow-left (concat left " "))
-         (card-width (+ inner 2)))
+         (border-h (make-string inner ?─))
+         (border-face 'my/dashboard-card-border-face))
+    ;; Top border
     (insert left
-            (propertize "★" 'face 'my/dashboard-card-face)
-            (propertize (make-string (1- card-width) ?\s) 'face 'my/dashboard-card-face)
-            (propertize " " 'face 'my/dashboard-card-face)
-            (propertize " " 'face 'my/dashboard-default-face)
+            (propertize "╭" 'face border-face)
+            (propertize border-h 'face border-face)
+            (propertize "╮" 'face border-face)
             "\n")
-    (add-face-text-property 0 (length title-line) 'my/dashboard-card-face 'append title-line)
+    ;; Title line
     (insert left
-            (propertize " " 'face 'my/dashboard-card-face)
+            (propertize "│" 'face border-face)
             (my/dashboard--center-line title-line inner)
-            (propertize " " 'face 'my/dashboard-card-face)
-            (propertize " " 'face 'my/dashboard-card-face)
-            (propertize " " 'face 'my/dashboard-card-shadow-face)
+            (propertize "│" 'face border-face)
             "\n")
-    (dolist (line lines)
-      (add-face-text-property 0 (length line) 'my/dashboard-card-face 'append line)
-      (insert left
-              (propertize " " 'face 'my/dashboard-card-face)
-              line
-              (propertize " " 'face 'my/dashboard-card-face)
-              (propertize " " 'face 'my/dashboard-card-face)
-              (propertize " " 'face 'my/dashboard-card-shadow-face)
-              "\n"))
+    ;; Separator
     (insert left
-            (propertize " " 'face 'my/dashboard-card-face)
-            (propertize (make-string (1- card-width) ?\s) 'face 'my/dashboard-card-face)
-            (propertize "★" 'face 'my/dashboard-card-face)
-            (propertize " " 'face 'my/dashboard-card-shadow-face)
+            (propertize "├" 'face border-face)
+            (propertize border-h 'face border-face)
+            (propertize "┤" 'face border-face)
             "\n")
-    (dotimes (_ 1)
-      (insert shadow-left
-              (propertize (make-string (1+ card-width) ?\s)
-                          'face 'my/dashboard-card-shadow-face)
+    ;; Content lines
+    (dolist (line lines)
+      (insert left
+              (propertize "│" 'face border-face)
+              line
+              (propertize "│" 'face border-face)
               "\n"))
-    (insert "\n")))
+    ;; Bottom border
+    (insert left
+            (propertize "╰" 'face border-face)
+            (propertize border-h 'face border-face)
+            (propertize "╯" 'face border-face)
+            "\n\n")))
 
 (defun my/dashboard-refresh ()
   "Refresh the dashboard contents."
@@ -266,5 +258,13 @@
   (my/dashboard-setup-windows))
 
 (add-hook 'emacs-startup-hook #'my/dashboard)
+
+(defun my/dashboard-resize-handler (&optional _frame)
+  "Refresh dashboard when window is resized."
+  (when-let ((buf (get-buffer my/dashboard-buffer-name)))
+    (when (get-buffer-window buf)
+      (my/dashboard-refresh))))
+
+(add-hook 'window-size-change-functions #'my/dashboard-resize-handler)
 
 (provide 'dashboard)
