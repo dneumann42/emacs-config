@@ -43,6 +43,14 @@
   (add-to-list 'eglot-server-programs
                '((yaml-mode yaml-ts-mode)
                  . ("yaml-language-server" "--stdio")))
+  (add-to-list 'eglot-server-programs
+               `((c-mode c-ts-mode c++-mode c++-ts-mode objc-mode objc-ts-mode)
+                 . ("clangd"
+                    "--background-index"
+                    "--clang-tidy"
+                    "--completion-style=detailed"
+                    "--header-insertion=never"
+                    "--pch-storage=memory")))
   (defun my/rust-analyzer-command ()
     ;; Prefer system rust-analyzer; keeps args centralized.
     (or (executable-find "rust-analyzer") "rust-analyzer"))

@@ -8,10 +8,21 @@
    '("f9d423fcd4581f368b08c720f04d206ee80b37bfb314fa37e279f554b6f415e9"
      "2c542fa063ea31deeacd27d4a0408795f5614f5d2eeb4be0e8937bf0f4c9d21e"
      default))
- '(package-selected-packages nil)
+ '(package-selected-packages
+   '(catppuccin-theme chatgpt corfu dockerfile-mode doom-modeline
+                      eldoc-box elisp-demos embark-consult eros
+                      geiser-guile helpful info-colors json-mode
+                      ligature line-reminder marginalia
+                      multiple-cursors nim-mode ob-languages ob-tcl
+                      org-bullets org-modern org-remoteimg
+                      parinfer-rust-mode rust-mode shell-pop
+                      sly-quicklisp treemacs-icons-dired
+                      treemacs-magit treemacs-projectile
+                      typescript-mode ultra-scroll valign vertico
+                      volatile-highlights yaml-mode yascroll zoom))
  '(package-vc-selected-packages
    '((org-remoteimg :vc-backend Git :url
-		    "https://github.com/gaoDean/org-remoteimg"))))
+                    "https://github.com/gaoDean/org-remoteimg"))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.

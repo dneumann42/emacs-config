@@ -12,3 +12,4 @@
 (load "theme")
 (load "org-settings")
 (load "help")
+(put 'upcase-region 'disabled nil)
