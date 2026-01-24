@@ -47,7 +47,9 @@
   (setq-local org-link-descriptive t)
   (visual-line-mode 1)
   (my/org-redisplay-inline-images)
-  (add-hook 'after-save-hook #'org-redisplay-inline-images nil t))
+  (add-hook 'after-save-hook #'org-redisplay-inline-images nil t)
+  (run-with-idle-timer 0.1 nil (lambda ()
+                                  (font-lock-ensure))))
 
 ;;; Main org configuration
 
@@ -63,6 +65,7 @@
         url-automatic-caching t
         org-startup-folded nil
         org-confirm-babel-evaluate nil
+        org-src-fontify-natively t
         org-babel-default-header-args
         (cons '(:results . "output drawer replace")
               (assq-delete-all :results org-babel-default-header-args)))
@@ -75,6 +78,7 @@
 
   :hook
   (org-mode . my/org-setup-pretty)
+  (org-mode . variable-pitch-mode)
 
   :bind
   (("C-c c" . org-capture)
@@ -83,6 +87,9 @@
    ("C-c g" . my/org-sync))
 
   :config
+  (add-hook 'text-mode-hook (lambda () (setq-local line-spacing 0.1)))
+  (add-hook 'text-mode-hook 'flyspell-mode)
+  (add-hook 'text-mode-hook 'visual-line-mode)  
   (dolist (face-scale '((org-document-title . 2.0)
                         (org-level-1 . 1.75)
                         (org-level-2 . 1.5)
@@ -133,13 +140,33 @@
 (use-package org-remoteimg
   :vc (:url "https://github.com/gaoDean/org-remoteimg"
        :rev :newest)
-  :after org)
+  :after org
+  :init
+  (unless (boundp 'org-link-preview-overlays)
+    (defvar org-link-preview-overlays nil)))
 
 (use-package valign
   :ensure t
   :init
   (setq valign-fancy-bar t)
   :hook (org-mode . valign-mode))
+
+(use-package ligature
+  :ensure t
+  :config
+  (ligature-set-ligatures 'org-mode '("www" "**" "***" "**/" "*>" "*/" "\\\\" "\\\\\\"
+                                      "{-" "[]" "::" ":::" ":=" "!!" "!=" "!==" "-}"
+                                      "--" "---" "-->" "->" "->>" "-<" "-<<" "-~"
+                                      "#{" "#[" "##" "###" "####" "#(" "#?" "#_" "#_("
+                                      ".-" ".=" ".." "..<" "..." "?=" "??" ";;" "/*"
+                                      "/**" "/=" "/==" "/>" "//" "///" "&&" "||" "||="
+                                      "|=" "|>" "^=" "$>" "++" "+++" "+>" "=:=" "=="
+                                      "===" "==>" "=>" "=>>" "<=" "=<<" "=/=" ">-" ">="
+                                      ">=>" ">>" ">>-" ">>=" ">>>" "<*" "<*>" "<|" "<|>"
+                                      "<$" "<$>" "<!--" "<-" "<--" "<->" "<+" "<+>" "<="
+                                      "<==" "<=>" "<=<" "<>" "<<" "<<-" "<<=" "<<<" "<~"
+                                      "<~~" "</" "</>" "~@" "~-" "~=" "~>" "~~" "~~>" "%%"))
+  :hook (org-mode . ligature-mode))
 
 (use-package org-modern
   :ensure t
@@ -162,16 +189,25 @@
 
   :config
   (set-face-attribute 'org-code nil
-                      :inherit 'fixed-pitch
+                      :family "Hasklug Nerd Font Mono"
                       :background "#1e1e1e"
                       :box '(:line-width 1 :color "#333333" :style released-button))
   (set-face-attribute 'org-verbatim nil
-                      :inherit 'fixed-pitch
+                      :family "Hasklug Nerd Font Mono"
                       :background "#1e1e1e"
                       :box '(:line-width 1 :color "#333333" :style released-button))
   (set-face-attribute 'org-block nil
+                      :family "Hasklug Nerd Font Mono"
                       :background "#1e1e1e"
                       :extend t)
+  (set-face-attribute 'org-block-begin-line nil
+                      :family "Hasklug Nerd Font Mono")
+  (set-face-attribute 'org-block-end-line nil
+                      :family "Hasklug Nerd Font Mono")
+  (set-face-attribute 'org-table nil
+                      :family "Hasklug Nerd Font Mono")
+  (set-face-attribute 'org-meta-line nil
+                      :family "Hasklug Nerd Font Mono")
   (set-face-attribute 'region nil
                       :background "#3e4a5b"
                       :extend t))
@@ -479,5 +515,34 @@
     (my/org-hide-results-label-clear)))
 
 (add-hook 'org-mode-hook #'my/org-hide-results-label-mode)
+
+(easy-menu-define cc/emphasize-menu nil
+  "Keymap for Emphasize Menu"
+  '("Style"
+    :visible (region-active-p)
+    ["Bold" cc/emphasize-bold
+     :enable (region-active-p)
+     :visible (or (derived-mode-p 'org-mode) (derived-mode-p 'markdown-mode))
+     :help "Bold selected region"]
+    ["Italic" cc/emphasize-italic
+     :enable (region-active-p)
+     :visible (or (derived-mode-p 'org-mode) (derived-mode-p 'markdown-mode))     
+     :help "Italic selected region"]
+    ["Code" cc/emphasize-code
+     :enable (region-active-p)
+     :visible (or (derived-mode-p 'org-mode) (derived-mode-p 'markdown-mode))     
+     :help "Code selected region"]
+    ["Underline" cc/emphasize-underline
+     :enable (region-active-p)
+     :visible (derived-mode-p 'org-mode)     
+     :help "Underline selected region"]
+    ["Verbatim" cc/emphasize-verbatim
+     :enable (region-active-p)
+     :visible (derived-mode-p 'org-mode)
+     :help "Verbatim selected region"]
+    ["Strike Through" cc/emphasize-strike-through
+     :enable (region-active-p)
+     :visible (or (derived-mode-p 'org-mode) (derived-mode-p 'markdown-mode))     
+     :help "Strike-through selected region"]))
 
 (provide 'org-settings)

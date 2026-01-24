@@ -520,6 +520,8 @@ INTERACTIVE is ignored; always fetches the buffer silently."
   "Start Eglot only when a server is configured and available."
   (when (require 'eglot nil t)
     (cond
+     ((bound-and-true-p org-src-mode)
+      nil)
      ((derived-mode-p 'scheme-mode)
       (when (and (not (my/guile-lsp-command))
                  (bound-and-true-p eglot-managed-mode))
