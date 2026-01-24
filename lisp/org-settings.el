@@ -186,9 +186,11 @@
   "Face for inline org buttons.")
 
 (defvar my/org-inline-button-actions
-  '(("Run"    . my/org-inline-button-run-next-src)
-    ("Export" . my/org-inline-button-export-dispatch)
-    ("Export PDF" . my/org-export-pdf))
+  '(("Run"        . my/org-inline-button-run-next-src)
+    ("Export"     . my/org-inline-button-export-dispatch)
+    ("Export PDF" . my/org-export-pdf)
+    ("Clean"      . my/org-clean-all-results)
+    ("Eval All"   . my/org-eval-all-src-blocks))
   "Alist mapping button labels to functions.")
 
 (defun my/org-inline-button--action (label)
@@ -227,6 +229,19 @@
   "Export pdf of org document"
   (interactive)
   (call-interactively #'org-latex-export-to-pdf))
+
+(defun my/org-clean-all-results ()
+  "Remove all results sections from the buffer."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (org-babel-next-src-block)
+      (org-babel-remove-result))))
+
+(defun my/org-eval-all-src-blocks ()
+  "Evaluate all source blocks in the buffer."
+  (interactive)
+  (org-babel-execute-buffer))
 
 (defun my/org-inline-buttons-clear ()
   "Remove all inline button overlays in the current buffer."
@@ -366,22 +381,42 @@
 (defun my/org-pretty-results ()
   "Overlay RESULT drawers so you mostly see just the value."
   (interactive)
+  (my/org-pretty-results-clear)
   (save-excursion
     (goto-char (point-min))
-    (while (re-search-forward "^:results:\\(\n\\(?:.*\n\\)*?\\):end:\n?" nil t)
+    (while (re-search-forward "^:results:\\(\n\\(?:.*\n\\)*?\\):end:" nil t)
       (let* ((start (match-beginning 0))
              (end   (match-end 0))
              (body  (match-string 1))
              (value (string-trim body))
-             (ov (make-overlay start end nil t t)))
+             (ov (make-overlay start end nil t nil))
+             (map (make-sparse-keymap))
+             (go-up (lambda ()
+                      (interactive)
+                      (goto-char start)
+                      (forward-line -1)))
+             (go-down (lambda ()
+                        (interactive)
+                        (goto-char end)
+                        (forward-line 1)))
+             (insert-after (lambda ()
+                             (interactive)
+                             (goto-char end)
+                             (end-of-line)
+                             (newline))))
+        (define-key map (kbd "C-p") go-up)
+        (define-key map (kbd "C-n") go-down)
+        (define-key map (kbd "<up>") go-up)
+        (define-key map (kbd "<down>") go-down)
+        (define-key map (kbd "RET") insert-after)
+        (define-key map (kbd "<return>") insert-after)
+        (overlay-put ov 'keymap map)
         (overlay-put ov 'my-pretty-results t)
         (overlay-put ov 'priority 1100)
         (overlay-put ov 'evaporate t)
         (overlay-put ov 'display
-                     (concat
-                      (propertize "Results: " 'face 'shadow)
-                      (propertize value 'face 'org-code)
-                      "\n"))))))
+                     (propertize (concat "Results: " value)
+                                 'face '(shadow org-code)))))))
 
 (defun my/org-pretty-results-clear ()
   (interactive)
